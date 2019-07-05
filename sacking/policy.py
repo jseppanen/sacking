@@ -50,20 +50,28 @@ class GaussianPolicy(nn.Module):
                              hidden_layers=hidden_layers)
         self._squash = squash
 
-    def forward(self, input: Tensor) -> PolicyOutput:
+    def forward(self, input: Tensor, *,
+                mode: str = 'sample') -> PolicyOutput:
         """Sample action from policy.
         :returns: action and its log-probability
         """
         action_stats = self.net(input)
         action_mean, action_log_std = action_stats.chunk(2, dim=-1)
-        action_log_std = action_log_std.clamp(min=LOG_STD_MIN, max=LOG_STD_MAX)
-        action_dist = Normal(action_mean, action_log_std.exp())
-        action = action_dist.rsample()
-        log_prob = action_dist.log_prob(action).sum(1)
+        if mode == 'sample':
+            action_log_std = action_log_std.clamp(min=LOG_STD_MIN, max=LOG_STD_MAX)
+            action_dist = Normal(action_mean, action_log_std.exp())
+            action = action_dist.rsample()
+            log_prob = action_dist.log_prob(action).sum(1)
+        elif mode == 'best':
+            action = action_mean.detach()
+            log_prob = torch.zeros_like(action)
+        else:
+            raise ValueError(mode)
 
         if self._squash:
             action = torch.tanh(action)
-            log_prob = log_prob - torch.log1p(-(action ** 2) + EPS).sum(1)
+            if mode == 'sample':
+                log_prob = log_prob - torch.log1p(-(action ** 2) + EPS).sum(1)
 
         return PolicyOutput(action, log_prob)
 

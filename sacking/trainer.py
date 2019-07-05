@@ -1,5 +1,7 @@
 
 import copy
+import logging
+import os
 import random
 from collections import deque
 from typing import Dict, Optional, Sequence, Union
@@ -27,8 +29,10 @@ def train(policy: GaussianPolicy,
           num_steps: int = int(100e3),
           num_initial_exploration_steps: int = int(1e3),
           update_interval: int = 1,
+          progress_interval: int = 1000,
           target_network_update_weight: float = 0.1,
-          target_entropy: Optional[float] = None) -> None:
+          target_entropy: Optional[float] = None,
+          rundir: str = 'runs') -> None:
     """Train policy and Q-network with soft actor-critic (SAC)
 
     Reference: Haarnoja et al, Soft Actor-Critic Algorithms and Applications
@@ -39,6 +43,10 @@ def train(policy: GaussianPolicy,
 
     if target_entropy is None:
         target_entropy = -np.prod(env.action_space.shape)
+
+    os.makedirs(rundir, exist_ok=True)
+    writer = SummaryWriter(rundir)
+
     # stack twin Q functions and create target network
     q_networks = StackedModule(q_network if isinstance(q_network, Sequence)
                                else [q_network])
@@ -74,7 +82,7 @@ def train(policy: GaussianPolicy,
         replaybuf.append(
             Transition(observation.numpy(), action.numpy(), reward,
                        next_observation.numpy(), done))
-    
+
     def optimization_step(step: int) -> None:
         if step < num_initial_exploration_steps:
             return
@@ -91,7 +99,10 @@ def train(policy: GaussianPolicy,
             target_q_value = batch['reward'] + discount * next_state_value
 
         pred_q_values = q_networks(batch['observation'], batch['action'])
-        q_networks_loss = F.mse_loss(pred_q_values, target_q_value[None, :])
+        q_networks_loss = (
+            F.mse_loss(pred_q_values[0], target_q_value)
+            + F.mse_loss(pred_q_values[1], target_q_value)
+        )
         q_networks_optimizer.zero_grad()
         q_networks_loss.backward()
         q_networks_optimizer.step()
@@ -121,6 +132,26 @@ def train(policy: GaussianPolicy,
         environment_step(step)
         if step % update_interval == 0:
             optimization_step(step)
+        if step > 0 and step % progress_interval == 0:
+            metrics = validate(policy, env)
+            for name in metrics:
+                writer.add_scalar(f'eval/{name}', metrics[name], step)
+            logging.info('step %d reward %f', step, metrics['episode_reward'])
+
+    writer.close()
+
+
+def validate(policy: GaussianPolicy, env: Env):
+    """Validate policy on environment"""
+    episode_reward = 0.0
+    observation = env.reset()
+    done = False
+    with torch.no_grad():
+        while not done:
+            action, _ = policy(observation.unsqueeze(0), mode='best')
+            observation, reward, done, _ = env.step(action.squeeze(0))
+            episode_reward += reward
+    return {'episode_reward': episode_reward}
 
 
 def torch_env(env: Env) -> Env:
