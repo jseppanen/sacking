@@ -44,9 +44,9 @@ class GaussianPolicy(nn.Module):
         :param input_dim: Input dimension
         :param action_dim: Action dimension
         :param squash: Whether to squash actions to [-1, 1] range
-q        """
+        """
         super().__init__()
-        self.net = FCNetwork(input_dim, action_dim,
+        self.net = FCNetwork(input_dim, 2 * action_dim,
                              hidden_layers=hidden_layers)
         self._squash = squash
 
@@ -54,7 +54,8 @@ q        """
         """Sample action from policy.
         :returns: action and its log-probability
         """
-        action_mean, action_log_std = self.net(input).chunk(2, dim=1)
+        action_stats = self.net(input)
+        action_mean, action_log_std = action_stats.chunk(2, dim=-1)
         action_log_std = action_log_std.clamp(min=LOG_STD_MIN, max=LOG_STD_MAX)
         action_dist = Normal(action_mean, action_log_std.exp())
         action = action_dist.rsample()
@@ -72,7 +73,7 @@ class QNetwork(nn.Module):
 
     def __init__(self, input_dim: int, action_dim: int, *,
                  hidden_layers: Sequence[int] = (64,)):
-        super().__init__(self)
+        super().__init__()
         self.net = FCNetwork(input_dim + action_dim, 1,
                              hidden_layers=hidden_layers)
 
@@ -87,7 +88,8 @@ class QNetwork(nn.Module):
 
 class StackedModule(nn.Module):
     def __init__(self, modules: Sequence[nn.Module]):
-        self.modules = nn.ModuleList(modules)
+        super().__init__()
+        self.submodules = nn.ModuleList(modules)
 
     def forward(self, *inputs) -> Tensor:
-        return torch.cat([m(*inputs) for m in self.modules])
+        return torch.stack([m(*inputs) for m in self.submodules])

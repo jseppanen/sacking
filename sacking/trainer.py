@@ -2,11 +2,13 @@
 import copy
 import random
 from collections import deque
-from typing import Optional, Sequence, Union
+from typing import Dict, Optional, Sequence, Union
 
+import numpy as np
 import torch
 from torch import nn
 from torch import optim
+from torch import Tensor
 from torch.nn import functional as F
 from torch.utils.tensorboard import SummaryWriter
 
@@ -28,9 +30,15 @@ def train(policy: GaussianPolicy,
           target_network_update_weight: float = 0.1,
           target_entropy: Optional[float] = None) -> None:
     """Train policy and Q-network with soft actor-critic (SAC)
+
+    Reference: Haarnoja et al, Soft Actor-Critic Algorithms and Applications
+    https://arxiv.org/pdf/1812.05905.pdf
+
     :param update_interval: Environment steps between each optimization step
     """
 
+    if target_entropy is None:
+        target_entropy = -np.prod(env.action_space.shape)
     # stack twin Q functions and create target network
     q_networks = StackedModule(q_network if isinstance(q_network, Sequence)
                                else [q_network])
@@ -43,25 +51,29 @@ def train(policy: GaussianPolicy,
     alpha_optimizer = optim.Adam([log_alpha], lr=learning_rate)
 
     replaybuf = deque(maxlen=replay_buffer_size)
-    observation, _, done = env.reset()
+    env = torch_env(env)
+    observation = env.reset()
+    done = False
 
     def environment_step(step: int) -> None:
         nonlocal observation, done
 
-        while done:
-            observation, _, done = env.reset()
+        if not done:
+            observation = env.reset()
 
         # sample action from the policy
         with torch.no_grad():
             if step < num_initial_exploration_steps:
                 action = 2 * torch.rand(1) - 1
             else:
-                action = policy(observation).action
+                action, _ = policy(observation.unsqueeze(0))
+                action = action.squeeze(0)
 
         # sample transition from the environment
-        next_observation, reward, done = env.step(action)
+        next_observation, reward, done, _ = env.step(action)
         replaybuf.append(
-            Transition(observation, action, reward, next_observation, done))
+            Transition(observation.numpy(), action.numpy(), reward,
+                       next_observation.numpy(), done))
     
     def optimization_step(step: int) -> None:
         if step < num_initial_exploration_steps:
@@ -72,22 +84,22 @@ def train(policy: GaussianPolicy,
 
         # Update Q-function parameters (Eq. 6)
         with torch.no_grad():
-            next_action, next_action_log_prob = policy(batch.next_observation)
-            next_q_values = target_q_networks(batch.next_observation, next_action)
-            next_state_value = next_q_values.min(0) - alpha * next_action_log_prob
-            next_state_value *= ~batch.done
-            target_q_value = batch.reward + discount * next_state_value
+            next_action, next_action_log_prob = policy(batch['next_observation'])
+            next_q_values = target_q_networks(batch['next_observation'], next_action)
+            next_state_value = next_q_values.min(0)[0] - alpha * next_action_log_prob
+            next_state_value *= (~batch['done']).float()
+            target_q_value = batch['reward'] + discount * next_state_value
 
-        pred_q_values = q_networks(batch.observation, batch.action)
+        pred_q_values = q_networks(batch['observation'], batch['action'])
         q_networks_loss = F.mse_loss(pred_q_values, target_q_value[None, :])
         q_networks_optimizer.zero_grad()
         q_networks_loss.backward()
         q_networks_optimizer.step()
 
         # Update policy weights (Eq. 10)
-        action, action_log_prob = policy(batch.observation)
-        q_values = q_networks(batch.observation, action)
-        state_value = q_values.min(0) - alpha * action_log_prob
+        action, action_log_prob = policy(batch['observation'])
+        q_values = q_networks(batch['observation'], action)
+        state_value = q_values.min(0)[0] - alpha * action_log_prob
         policy_loss = -state_value.mean()
         policy_optimizer.zero_grad()
         policy_loss.backward()
@@ -111,12 +123,32 @@ def train(policy: GaussianPolicy,
             optimization_step(step)
 
 
+def torch_env(env: Env) -> Env:
+    class TorchEnv:
+        def reset(self):
+            obs = env.reset()
+            obs = torch.from_numpy(obs.astype(np.float32))
+            return obs
+        def step(self, action):
+            next_obs, reward, done, info = env.step(action.numpy())
+            next_obs = torch.from_numpy(next_obs.astype(np.float32))
+            reward = np.array([reward], dtype=np.float32)
+            done = np.array([done], dtype=np.uint8)
+            return next_obs, reward, done, info
+    return TorchEnv()
+
+
 @torch.no_grad()
-def sample_batch(replaybuf: Sequence[Transition], size: int) -> Transition:
+def sample_batch(replaybuf: Sequence[Transition], size: int) \
+        -> Dict[str, Tensor]:
     """Sample batch of transitions from replay buffer."""
     batch = random.sample(replaybuf, size)
-    batch = map(torch.cat, zip(*batch))  # transpose
-    return Transition(*batch)
+    batch = map(np.stack, zip(*batch))  # transpose
+    batch = {k: torch.from_numpy(v)
+             for k, v in zip(Transition._fields, batch)}
+    for k in ['reward', 'done']:
+        batch[k] = batch[k].squeeze(1)
+    return batch
 
 
 @torch.no_grad()

@@ -3,7 +3,7 @@ from typing import NamedTuple, Optional, Union
 from typing_extensions import Protocol
 
 import numpy as np
-from torch import ByteTensor, FloatTensor
+from torch import FloatTensor
 
 
 # actions can be discrete or continuous
@@ -44,8 +44,8 @@ class PolicyOutput(NamedTuple):
 
 class Transition(NamedTuple):
     """Environment interaction example(s)."""
-    observation: FloatTensor
-    action: FloatTensor
-    reward: FloatTensor
-    next_observation: FloatTensor
-    done: ByteTensor  # boolean
+    observation: np.ndarray  # float32
+    action: np.ndarray  # float32
+    reward: np.ndarray  # float32
+    next_observation: np.ndarray  # float32
+    done: np.ndarray  # bool
