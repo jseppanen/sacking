@@ -4,7 +4,7 @@ import logging
 import os
 import random
 from collections import deque
-from typing import Dict, Optional, Sequence, Union
+from typing import Dict, Optional, Sequence, Tuple, Union
 
 import numpy as np
 import torch
@@ -60,13 +60,13 @@ def train(policy: GaussianPolicy,
 
     replaybuf = deque(maxlen=replay_buffer_size)
     env = torch_env(env)
-    observation = env.reset()
-    done = False
+    observation: Tensor = env.reset()
+    done: bool = False
 
     def environment_step(step: int) -> None:
         nonlocal observation, done
 
-        if not done:
+        if done:
             observation = env.reset()
 
         # sample action from the policy
@@ -80,8 +80,12 @@ def train(policy: GaussianPolicy,
         # sample transition from the environment
         next_observation, reward, done, _ = env.step(action)
         replaybuf.append(
-            Transition(observation.numpy(), action.numpy(), reward,
-                       next_observation.numpy(), done))
+            Transition(observation.numpy(),
+                       action.numpy(),
+                       np.array([reward], dtype=np.float32),
+                       next_observation.numpy(),
+                       np.array([done], dtype=bool)))
+        observation = next_observation
 
     def optimization_step(step: int) -> None:
         if step < num_initial_exploration_steps:
@@ -141,7 +145,8 @@ def train(policy: GaussianPolicy,
     writer.close()
 
 
-def validate(policy: GaussianPolicy, env: Env):
+def validate(policy: GaussianPolicy, env: Env) \
+        -> Dict[str, float]:
     """Validate policy on environment"""
     episode_reward = 0.0
     observation = env.reset()
@@ -156,15 +161,13 @@ def validate(policy: GaussianPolicy, env: Env):
 
 def torch_env(env: Env) -> Env:
     class TorchEnv:
-        def reset(self):
+        def reset(self) -> Tensor:
             obs = env.reset()
             obs = torch.from_numpy(obs.astype(np.float32))
             return obs
-        def step(self, action):
+        def step(self, action) -> Tuple[Tensor, float, bool, Dict]:
             next_obs, reward, done, info = env.step(action.numpy())
             next_obs = torch.from_numpy(next_obs.astype(np.float32))
-            reward = np.array([reward], dtype=np.float32)
-            done = np.array([done], dtype=np.uint8)
             return next_obs, reward, done, info
     return TorchEnv()
 
@@ -179,6 +182,7 @@ def sample_batch(replaybuf: Sequence[Transition], size: int) \
              for k, v in zip(Transition._fields, batch)}
     for k in ['reward', 'done']:
         batch[k] = batch[k].squeeze(1)
+    batch['done'] = batch['done'].byte()
     return batch
 
 
