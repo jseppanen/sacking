@@ -15,7 +15,7 @@ from torch.nn import functional as F
 from torch.utils.tensorboard import SummaryWriter
 
 from .policy import GaussianPolicy, QNetwork, StackedModule
-from .typing import Env, Transition
+from .typing import Checkpoint, Env, Transition
 
 
 def train(policy: GaussianPolicy,
@@ -30,6 +30,7 @@ def train(policy: GaussianPolicy,
           num_initial_exploration_steps: int = int(1e3),
           update_interval: int = 1,
           progress_interval: int = 1000,
+          checkpoint_interval: int = 10000,
           target_network_update_weight: float = 5e-3,
           target_entropy: Optional[float] = None,
           rundir: str = 'runs') -> None:
@@ -131,6 +132,19 @@ def train(policy: GaussianPolicy,
         soft_update(target_q_networks, q_networks,
                     target_network_update_weight)
 
+
+    def save_checkpoint(step: int) -> None:
+        os.makedirs(f'{rundir}/checkpoints', exist_ok=True)
+        path = f'{rundir}/checkpoints/checkpoint.{step:06d}.pt'
+        cp = Checkpoint(policy,
+                        q_networks,
+                        log_alpha.detach().numpy(),
+                        policy_optimizer,
+                        q_networks_optimizer,
+                        alpha_optimizer)
+        cp.save(path)
+        logging.info('saved model checkpoint to %s', path)
+
     # main loop
     for step in range(num_steps):
         environment_step(step)
@@ -141,6 +155,8 @@ def train(policy: GaussianPolicy,
             for name in metrics:
                 writer.add_scalar(f'eval/{name}', metrics[name], step)
             logging.info('step %d reward %f', step, metrics['episode_reward'])
+        if step > 0 and step % checkpoint_interval == 0:
+            save_checkpoint(step)
 
     writer.close()
 
