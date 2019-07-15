@@ -73,7 +73,8 @@ def train(policy: GaussianPolicy,
         # sample action from the policy
         with torch.no_grad():
             if step < num_initial_exploration_steps:
-                action = 2 * torch.rand(1) - 1
+                action = env.action_space.sample()
+                action = torch.from_numpy(action)
             else:
                 action, _ = policy(observation.unsqueeze(0))
                 action = action.squeeze(0)
@@ -177,6 +178,8 @@ def validate(policy: GaussianPolicy, env: Env) \
 
 def torch_env(env: Env) -> Env:
     class TorchEnv:
+        def __getattr__(self, key: str):
+            return getattr(env, key)
         def reset(self) -> Tensor:
             obs = env.reset()
             obs = torch.from_numpy(obs.astype(np.float32))
