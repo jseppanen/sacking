@@ -7,6 +7,7 @@ import yaml
 
 from .policy import GaussianPolicy, QNetwork
 from .trainer import train
+from .typing import Env
 from .version import __version__
 
 
@@ -23,10 +24,7 @@ def main(config: str, rundir: str):
 
     config = yaml.load(open(config))
 
-    assert '/' in config['env']
-    env_ns, env_name = config['env'].split('/', 1)
-    assert env_ns == 'gym'
-    env = gym.make(env_name)
+    env = load_env(config['env'])
 
     assert isinstance(env.observation_space, gym.spaces.Box)
     assert isinstance(env.action_space, gym.spaces.Box)
@@ -42,7 +40,6 @@ def main(config: str, rundir: str):
         for i in range(config['q_network']['num_heads'])
     ]
 
-
     train(policy, q_networks, env,
           batch_size=config['batch_size'],
           learning_rate=config['learning_rate'],
@@ -54,6 +51,19 @@ def main(config: str, rundir: str):
           checkpoint_interval=config['checkpoint_interval'],
           rundir=rundir
           )
+
+
+def load_env(full_name: str) -> Env:
+    """Load environment"""
+    assert '/' in full_name
+    env_ns, env_name = full_name.split('/', 1)
+    if env_ns == 'gym':
+        return gym.make(env_name)
+    elif env_ns == 'roboschool':
+        import roboschool
+        return gym.make(env_name)
+    else:
+        raise ValueError(f'unknown env: {full_name}')
 
 
 if __name__ == '__main__':
