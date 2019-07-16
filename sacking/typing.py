@@ -1,12 +1,10 @@
 
-from typing import NamedTuple, Optional, Union
+from typing import Dict, NamedTuple, Optional, Union
 from typing_extensions import Protocol
 
 import numpy as np
 import torch
 from torch import FloatTensor
-from torch.nn import Module
-from torch.optim import Optimizer
 
 
 # actions can be discrete or continuous
@@ -56,21 +54,20 @@ class Transition(NamedTuple):
 
 class Checkpoint(NamedTuple):
     """Policy checkpoint."""
-    policy: Module
-    q_network: Module
+    policy: Dict
+    q_network: Dict
     log_alpha: np.float32
-    policy_optimizer: Optimizer
-    q_network_optimizer: Optimizer
-    alpha_optimizer: Optimizer
+    policy_optimizer: Dict
+    q_network_optimizer: Dict
+    alpha_optimizer: Dict
 
     def save(self, path: str) -> None:
-        """Save model checkpoint."""
-        state = {
-            'policy': self.policy.state_dict(),
-            'q_network': self.q_network.state_dict(),
-            'log_alpha': self.log_alpha,
-            'policy_optimizer': self.policy_optimizer.state_dict(),
-            'q_network_optimizer': self.q_network_optimizer.state_dict(),
-            'alpha_optimizer': self.alpha_optimizer.state_dict(),
-        }
+        """Save model checkpoint to disk."""
+        state = self._asdict()
         torch.save(state, path)
+
+    @classmethod
+    def load(cls, path: str) -> 'Checkpoint':
+        """Load model checkpoint from disk."""
+        state = torch.load(path)
+        return cls(**state)

@@ -6,20 +6,25 @@ import gym
 import yaml
 
 from .policy import GaussianPolicy, QNetwork
-from .trainer import train
-from .typing import Env
+from .trainer import train, simulate
+from .typing import Checkpoint, Env
 from .version import __version__
 
 
-@click.command()
-@click.option('--config', required=True, type=click.Path(exists=True))
-@click.option('--rundir', default='runs', type=click.Path())
-def main(config: str, rundir: str):
-    """Train SAC policy for a Gym environment.
-    """
+@click.group()
+@click.version_option(__version__)
+def main():
     logging.basicConfig(level=logging.INFO,
                         format='%(asctime)s %(message)s',
                         datefmt='%Y-%m-%d %H:%M:%S')
+
+
+@main.command('train')
+@click.option('--config', required=True, type=click.Path(exists=True))
+@click.option('--rundir', default='runs', type=click.Path())
+def train_cmd(config: str, rundir: str):
+    """Train SAC policy
+    """
     logging.info(f'sacking {__version__}')
 
     config = yaml.load(open(config))
@@ -51,6 +56,20 @@ def main(config: str, rundir: str):
           checkpoint_interval=config['checkpoint_interval'],
           rundir=rundir
           )
+
+
+@main.command('show')
+@click.argument('env')
+@click.argument('checkpoint', type=click.Path(exists=True))
+def show_cmd(env: str, checkpoint: str):
+    """Show policy simulation on screen
+    """
+    env = load_env(env)
+    checkpoint = Checkpoint.load(checkpoint)
+    policy = GaussianPolicy.from_checkpoint(checkpoint)
+
+    while True:
+        simulate(policy, env)
 
 
 def load_env(full_name: str) -> Env:

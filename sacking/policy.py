@@ -6,7 +6,7 @@ from torch import Tensor
 from torch import nn
 from torch.distributions import Normal
 
-from .typing import PolicyOutput
+from .typing import Checkpoint, PolicyOutput
 
 EPS = 1e-6
 LOG_STD_MAX = 2
@@ -74,6 +74,25 @@ class GaussianPolicy(nn.Module):
                 log_prob = log_prob - torch.log1p(-(action ** 2) + EPS).sum(1)
 
         return PolicyOutput(action, log_prob)
+
+    @classmethod
+    def from_checkpoint(cls, checkpoint: Checkpoint) -> 'GaussianPolicy':
+        """Restore Gaussian policy from model checkpoint."""
+        # FIXME hacky way to recover layers on pytorch 1.1
+        # FIXME squash not recovered but hardcoded to True
+        state = checkpoint.policy
+        num_layers = len(state) // 2
+        _, input_dim = state['net.net.0.weight'].shape
+        output_dim = len(state[f'net.net.{2 * (num_layers - 1)}.bias'])
+        action_dim = output_dim // 2
+        hidden_layers = [
+            len(state[f'net.net.{2 * i}.bias'])
+            for i in range(num_layers - 1)
+        ]
+        policy = cls(input_dim=input_dim, action_dim=action_dim,
+                     hidden_layers=hidden_layers)
+        policy.load_state_dict(state)
+        return policy
 
 
 class QNetwork(nn.Module):

@@ -137,12 +137,12 @@ def train(policy: GaussianPolicy,
     def save_checkpoint(step: int) -> None:
         os.makedirs(f'{rundir}/checkpoints', exist_ok=True)
         path = f'{rundir}/checkpoints/checkpoint.{step:06d}.pt'
-        cp = Checkpoint(policy,
-                        q_networks,
+        cp = Checkpoint(policy.state_dict(),
+                        q_networks.state_dict(),
                         log_alpha.detach().numpy(),
-                        policy_optimizer,
-                        q_networks_optimizer,
-                        alpha_optimizer)
+                        policy_optimizer.state_dict(),
+                        q_networks_optimizer.state_dict(),
+                        alpha_optimizer.state_dict())
         cp.save(path)
         logging.info('saved model checkpoint to %s', path)
 
@@ -174,6 +174,20 @@ def validate(policy: GaussianPolicy, env: Env) \
             observation, reward, done, _ = env.step(action.squeeze(0))
             episode_reward += reward
     return {'episode_reward': episode_reward}
+
+
+def simulate(policy: GaussianPolicy, env: Env) \
+        -> None:
+    """Simulate policy on environment"""
+    env = torch_env(env)
+    observation = env.reset()
+    env_done = False
+    ui_active = True
+    with torch.no_grad():
+        while ui_active and not env_done:
+            action, _ = policy(observation.unsqueeze(0), mode='best')
+            observation, reward, env_done, _ = env.step(action.squeeze(0))
+            ui_active = env.render('human')
 
 
 def torch_env(env: Env) -> Env:
