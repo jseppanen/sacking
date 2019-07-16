@@ -1,14 +1,15 @@
 
 from typing import Sequence, Tuple
 
+import numpy as np
 import torch
 from torch import Tensor
 from torch import nn
 from torch.distributions import Normal
+from torch.nn.functional import softplus
 
 from .typing import Checkpoint, PolicyOutput
 
-EPS = 1e-6
 LOG_STD_MAX = 2
 LOG_STD_MIN = -20
 
@@ -69,10 +70,11 @@ class GaussianPolicy(nn.Module):
             raise ValueError(mode)
 
         if self._squash:
-            action = torch.tanh(action)
             if mode == 'sample':
-                log_prob = log_prob - torch.log1p(-(action ** 2) + EPS).sum(1)
-
+                log_prob = log_prob - 2.0 * (
+                    np.log(2.0) - action - softplus(-2.0 * action)
+                ).sum(1)
+            action = torch.tanh(action)
         return PolicyOutput(action, log_prob)
 
     @classmethod
