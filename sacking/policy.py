@@ -9,6 +9,7 @@ from torch.distributions import Normal
 from torch.nn import init
 from torch.nn.functional import softplus
 
+from . import tf_init
 from .typing import Checkpoint, PolicyOutput
 
 LOG_STD_MAX = 2
@@ -27,7 +28,8 @@ class FCNetwork(nn.Module):
         for s1, s2 in zip(sizes[:-1], sizes[1:]):
             fc = nn.Linear(s1, s2)
             # softlearning initialization
-            init.xavier_uniform_(fc.weight.data)
+            #init.xavier_uniform_(fc.weight.data)
+            tf_init.glorot_uniform_(fc.weight.data)
             fc.bias.data.fill_(0.0)
             layers.append(fc)
             # softlearning activation

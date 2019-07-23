@@ -37,13 +37,13 @@ def train_cmd(config: str, rundir: str):
     assert len(env.action_space.shape) == 1
     obs_dim = env.observation_space.shape[0]
     action_dim = env.action_space.shape[0]
-    policy = GaussianPolicy(obs_dim, action_dim,
-                            hidden_layers=config['policy']['hidden_layers'])
     q_networks = [
         QNetwork(obs_dim, action_dim,
                  hidden_layers=config['q_network']['hidden_layers'])
         for i in range(config['q_network']['num_heads'])
     ]
+    policy = GaussianPolicy(obs_dim, action_dim,
+                            hidden_layers=config['policy']['hidden_layers'])
 
     train(policy, q_networks, env,
           batch_size=config['batch_size'],
