@@ -14,6 +14,7 @@ from .typing import Checkpoint, PolicyOutput
 
 LOG_STD_MAX = 2
 LOG_STD_MIN = -20
+LOG_PROB_CONST = -0.5 * np.log(2.0 * np.pi)
 
 
 class FCNetwork(nn.Module):
@@ -67,10 +68,13 @@ class GaussianPolicy(nn.Module):
         action_stats = self.net(input)
         action_mean, action_log_std = action_stats.chunk(2, dim=-1)
         if mode == 'sample':
-            action_log_std = action_log_std.clamp(min=LOG_STD_MIN, max=LOG_STD_MAX)
-            action_dist = Normal(action_mean, action_log_std.exp())
-            action = action_dist.rsample()
-            log_prob = action_dist.log_prob(action).sum(1)
+            action_log_std = action_log_std.clamp(min=LOG_STD_MIN,
+                                                  max=LOG_STD_MAX)
+            latent = torch.randn_like(action_mean)
+            action = latent * action_log_std.exp() + action_mean
+            log_prob = (
+                -0.5 * latent ** 2 - action_log_std + LOG_PROB_CONST
+            ).sum(1)
         elif mode == 'best':
             action = action_mean.detach()
             log_prob = torch.zeros_like(action)
