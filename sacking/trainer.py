@@ -109,9 +109,6 @@ def train(policy: GaussianPolicy,
             F.mse_loss(pred_q_values[0], target_q_value)
             + F.mse_loss(pred_q_values[1], target_q_value)
         )
-        q_networks_optimizer.zero_grad()
-        q_networks_loss.backward()
-        q_networks_optimizer.step()
 
         # Update policy weights (Eq. 10)
         action, action_log_prob = policy(batch['observation'])
