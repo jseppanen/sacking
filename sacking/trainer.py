@@ -152,9 +152,11 @@ def train(policy: GaussianPolicy,
         policy_optimizer.step()
 
         # Adjust temperature (Eq. 18)
-        # NB. disagreement between paper and softlearning implementation
-        alpha_loss = -log_alpha.exp() * (action_log_prob + target_entropy).detach()
+        # NB. slight difference between paper and softlearning implementation
+        # see also https://github.com/rail-berkeley/softlearning/issues/37
+        alpha_loss = -log_alpha * (action_log_prob + target_entropy).detach()
         alpha_loss = alpha_loss.mean()
+        assert approx(alpha_loss) == slvalue['alpha_loss']
         alpha_optimizer.zero_grad()
         alpha_loss.backward()
         alpha_optimizer.step()
