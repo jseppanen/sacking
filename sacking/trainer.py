@@ -109,6 +109,9 @@ def train(policy: GaussianPolicy,
             F.mse_loss(pred_q_values[0], target_q_value)
             + F.mse_loss(pred_q_values[1], target_q_value)
         )
+        q_networks_optimizer.zero_grad()
+        q_networks_loss.backward()
+        q_networks_optimizer.step()
 
         # Update policy weights (Eq. 10)
         action, action_log_prob = policy(batch['observation'])
@@ -122,20 +125,13 @@ def train(policy: GaussianPolicy,
         alpha_loss = -log_alpha * (action_log_prob + target_entropy).detach()
         alpha_loss = alpha_loss.mean()
 
-        # alpha updates before policy: policy backprop uses *new* alpha
-        alpha_optimizer.zero_grad()
-        alpha_loss.backward()
-        alpha_optimizer.step()
-
-        # policy backprop depends on both alpha and Q network
+        # update alpha and policy carefully (two-way dependency)
         policy_optimizer.zero_grad()
         policy_loss.backward()
+        alpha_optimizer.zero_grad()
+        alpha_loss.backward()
         policy_optimizer.step()
-
-        # Q net updates after policy: policy backprop uses *old* Q net
-        q_networks_optimizer.zero_grad()
-        q_networks_loss.backward()
-        q_networks_optimizer.step()
+        alpha_optimizer.step()
 
         # Update target Q-network weights
         soft_update(target_q_networks, q_networks,
