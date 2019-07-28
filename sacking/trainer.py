@@ -104,8 +104,15 @@ def train(policy: GaussianPolicy,
 
         # XXX repro
         # batch = sample_batch(replaybuf, batch_size)
-        batch, slvalue = repro_batch()
+        batch, slvalue, slweights = repro_batch()
         alpha = log_alpha.exp().detach()
+
+        # check weights
+        for i in range(2):
+            compare_weights(q_networks.submodules[i].net.net, slweights['Q_weights'][i])
+            compare_weights(target_q_networks.submodules[i].net.net, slweights['Q_target_weights'][i])
+        compare_weights(policy.net.net, slweights['policy_weights'])
+        #assert approx(log_alpha) == slweights['log_alpha']
 
         # Update Q-function parameters (Eq. 6)
         with torch.no_grad():
@@ -143,23 +150,27 @@ def train(policy: GaussianPolicy,
         policy_loss = -state_value.mean()
         assert approx(policy_loss) == slvalue['policy_loss']
 
-        q_networks_optimizer.zero_grad()
-        q_networks_loss.backward()
-        q_networks_optimizer.step()
-
-        policy_optimizer.zero_grad()
-        policy_loss.backward()
-        policy_optimizer.step()
-
         # Adjust temperature (Eq. 18)
         # NB. slight difference between paper and softlearning implementation
         # see also https://github.com/rail-berkeley/softlearning/issues/37
         alpha_loss = -log_alpha * (action_log_prob + target_entropy).detach()
         alpha_loss = alpha_loss.mean()
         assert approx(alpha_loss) == slvalue['alpha_loss']
+
+        # alpha updates before policy: policy backprop uses *new* alpha
         alpha_optimizer.zero_grad()
         alpha_loss.backward()
         alpha_optimizer.step()
+
+        # policy backprop depends on both alpha and Q network
+        policy_optimizer.zero_grad()
+        policy_loss.backward()
+        policy_optimizer.step()
+
+        # Q net updates after policy: policy backprop uses *old* Q net
+        q_networks_optimizer.zero_grad()
+        q_networks_loss.backward()
+        q_networks_optimizer.step()
 
         # Update target Q-network weights
         soft_update(target_q_networks, q_networks,

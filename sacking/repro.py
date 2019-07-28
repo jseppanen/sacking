@@ -37,12 +37,17 @@ def repro_normal_sample(shape):
     return torch.from_numpy(latents)
 
 
+ITERATION = 0
+
+
 @torch.no_grad()
 def repro_batch():
     """Load repro batch from disk."""
-    step = 0
-    slbatch = pickle.load(open(f'repro/batch{step}.pkl', 'rb'))
-    slvalue = pickle.load(open(f'repro/values{step}.pkl', 'rb'))
+    global ITERATION
+    slbatch = pickle.load(open(f'repro/batch{ITERATION}.pkl', 'rb'))
+    slvalue = pickle.load(open(f'repro/values{ITERATION}.pkl', 'rb'))
+    slweight = pickle.load(open(f'repro/weights{ITERATION}.pkl', 'rb'))
+    ITERATION += 1
 
     batch = {
         'observation': torch.from_numpy(slbatch['observations']['observations']),
@@ -54,7 +59,7 @@ def repro_batch():
     for k in ['reward', 'done']:
         batch[k] = batch[k].squeeze(1)
     batch['done'] = batch['done'].byte()
-    return batch, slvalue
+    return batch, slvalue, slweight
 
 
 def compare_weights(net, weights):
