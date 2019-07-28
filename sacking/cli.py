@@ -27,7 +27,7 @@ def train_cmd(config: str, rundir: str):
     """
     logging.info(f'sacking {__version__}')
 
-    config = yaml.load(open(config))
+    config = yaml.safe_load(open(config))
 
     env = load_env(config['env'])
 
