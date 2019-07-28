@@ -75,5 +75,5 @@ class approx(ApproxNumpy):
     def __eq__(self, actual):
         if isinstance(actual, torch.Tensor):
             actual = actual.detach().numpy()
-        assert isinstance(actual, np.ndarray)
+        assert isinstance(actual, (np.ndarray, np.float32))
         return super().__eq__(actual)

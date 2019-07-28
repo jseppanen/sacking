@@ -129,15 +129,24 @@ def train(policy: GaussianPolicy,
             F.mse_loss(pred_q_values[0], target_q_value)
             + F.mse_loss(pred_q_values[1], target_q_value)
         )
+
+        # Update policy weights (Eq. 10)
+        action, action_log_prob = policy(batch['observation'])
+        assert approx(batch['observation']) == slvalue['policy_observations'][0]
+        assert approx(action) == slvalue['policy_actions']
+        assert approx(action_log_prob) == slvalue['policy_log_pis'].flatten()
+        #assert approx(log_alpha) == slvalue['policy_log_alpha'].flatten()
+        q_values = q_networks(batch['observation'], action)
+        assert approx(q_values) == slvalue['policy_Q_log_targets'][:,:,0]
+        state_value = q_values.min(0)[0] - alpha * action_log_prob
+        assert approx(state_value) == -slvalue['policy_kl_losses'].flatten()
+        policy_loss = -state_value.mean()
+        assert approx(policy_loss) == slvalue['policy_loss']
+
         q_networks_optimizer.zero_grad()
         q_networks_loss.backward()
         q_networks_optimizer.step()
 
-        # Update policy weights (Eq. 10)
-        action, action_log_prob = policy(batch['observation'])
-        q_values = q_networks(batch['observation'], action)
-        state_value = q_values.min(0)[0] - alpha * action_log_prob
-        policy_loss = -state_value.mean()
         policy_optimizer.zero_grad()
         policy_loss.backward()
         policy_optimizer.step()
