@@ -9,8 +9,9 @@ from torch.distributions import Normal
 from torch.nn import init
 from torch.nn.functional import softplus
 
-from . import tf_init
 from .typing import Checkpoint, PolicyOutput
+
+from .repro import repro_glorot_uniform_, repro_normal_sample
 
 LOG_STD_MAX = 2
 LOG_STD_MIN = -20
@@ -30,7 +31,7 @@ class FCNetwork(nn.Module):
             fc = nn.Linear(s1, s2)
             # softlearning initialization
             #init.xavier_uniform_(fc.weight.data)
-            tf_init.glorot_uniform_(fc.weight.data)
+            repro_glorot_uniform_(fc.weight.data)
             fc.bias.data.fill_(0.0)
             layers.append(fc)
             # softlearning activation
@@ -70,7 +71,9 @@ class GaussianPolicy(nn.Module):
         if mode == 'sample':
             action_log_std = action_log_std.clamp(min=LOG_STD_MIN,
                                                   max=LOG_STD_MAX)
-            latent = torch.randn_like(action_mean)
+            # XXX repro
+            #latent = torch.randn_like(action_mean)
+            latent = repro_normal_sample(action_mean.shape)
             action = latent * action_log_std.exp() + action_mean
             log_prob = (
                 -0.5 * latent ** 2 - action_log_std + LOG_PROB_CONST
@@ -118,11 +121,11 @@ class QNetwork(nn.Module):
         self.net = FCNetwork(input_dim + action_dim, 1,
                              hidden_layers=hidden_layers)
 
-    def forward(self, input: Tensor, action: Tensor) -> Tensor:
+    def forward(self, observation: Tensor, action: Tensor) -> Tensor:
         """Evaluate action value (Q).
         :returns: action value (Q)
         """
-        input = torch.cat([input, action], dim=1)
+        input = torch.cat([action, observation], dim=1)
         value = self.net(input).squeeze(1)
         return value
 

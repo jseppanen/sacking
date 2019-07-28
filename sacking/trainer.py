@@ -17,6 +17,8 @@ from torch.utils.tensorboard import SummaryWriter
 from .policy import GaussianPolicy, QNetwork, StackedModule
 from .typing import Checkpoint, Env, Transition
 
+from .repro import approx, repro_batch, compare_weights
+
 
 def train(policy: GaussianPolicy,
           q_network: Union[QNetwork, Sequence[QNetwork]],
@@ -48,6 +50,13 @@ def train(policy: GaussianPolicy,
     os.makedirs(rundir, exist_ok=True)
     writer = SummaryWriter(rundir)
 
+    # check weights
+    import pickle
+    slinit = pickle.load(open('repro/init.pkl', 'rb'))
+    for i in range(2):
+        compare_weights(q_network[i].net.net, slinit['Q_weights'][i])
+    compare_weights(policy.net.net, slinit['policy_weights'])
+
     # stack twin Q functions and create target network
     q_networks = StackedModule(q_network if isinstance(q_network, Sequence)
                                else [q_network])
@@ -72,7 +81,7 @@ def train(policy: GaussianPolicy,
 
         # sample action from the policy
         with torch.no_grad():
-            if step < num_initial_exploration_steps:
+            if 1: # XXX step < num_initial_exploration_steps:
                 action = env.action_space.sample()
                 action = torch.from_numpy(action)
             else:
@@ -93,19 +102,30 @@ def train(policy: GaussianPolicy,
         if step < num_initial_exploration_steps:
             return
 
-        batch = sample_batch(replaybuf, batch_size)
+        # XXX repro
+        # batch = sample_batch(replaybuf, batch_size)
+        batch, slvalue = repro_batch()
         alpha = log_alpha.exp().detach()
 
         # Update Q-function parameters (Eq. 6)
         with torch.no_grad():
             next_action, next_action_log_prob = policy(batch['next_observation'])
+            assert approx(batch['next_observation']) == slvalue['Q_target_next_observations'][0]
+            assert approx(next_action) == slvalue['Q_target_next_actions']
+            assert approx(next_action_log_prob) == slvalue['Q_target_next_log_pis'].flatten()
             next_q_values = target_q_networks(batch['next_observation'], next_action)
+            assert approx(next_q_values) == slvalue['Q_target_next_Q_values'][:,:,0]
             next_state_value = next_q_values.min(0)[0] - alpha * next_action_log_prob
+            assert approx(next_state_value) == slvalue['Q_target_next_values'].flatten()
             next_state_value *= (~batch['done']).float()
             target_q_value = batch['reward'] + discount * next_state_value
+            assert approx(target_q_value) == slvalue['Q_target'].flatten()
 
         pred_q_values = q_networks(batch['observation'], batch['action'])
-        q_networks_loss = (
+        assert approx(pred_q_values[0]) == slvalue['Q_values'][0].flatten()
+        assert approx(pred_q_values[1]) == slvalue['Q_values'][1].flatten()
+
+        q_networks_loss = 0.5 * (
             F.mse_loss(pred_q_values[0], target_q_value)
             + F.mse_loss(pred_q_values[1], target_q_value)
         )
