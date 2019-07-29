@@ -96,7 +96,8 @@ def train(policy: GaussianPolicy,
         batch = sample_batch(replaybuf, batch_size)
         alpha = log_alpha.exp().detach()
 
-        # Update Q-function parameters (Eq. 6)
+        # Update Q targets
+        # NB. use old policy that hasn't been updated for current batch
         with torch.no_grad():
             next_action, next_action_log_prob = policy(batch['next_observation'])
             next_q_values = target_q_networks(batch['next_observation'], next_action)
@@ -104,6 +105,20 @@ def train(policy: GaussianPolicy,
             next_state_value *= (~batch['done']).float()
             target_q_value = batch['reward'] + discount * next_state_value
 
+        # Update policy weights (Eq. 10)
+        # NB. use old Q network that hasn't been updated for current batch
+        action, action_log_prob = policy(batch['observation'])
+        q_values = q_networks(batch['observation'], action)
+        state_value = q_values.min(0)[0] - alpha * action_log_prob
+        policy_loss = -state_value.mean()
+        policy_optimizer.zero_grad()
+        policy_loss.backward()
+        policy_optimizer.step()
+
+        # Update Q-function parameters (Eq. 6)
+        # NB. Q network must be updated *after* policy update, because
+        # we don't want to backprop policy update through a Q network
+        # that is overfitted to current batch
         pred_q_values = q_networks(batch['observation'], batch['action'])
         q_networks_loss = 0.5 * (
             F.mse_loss(pred_q_values[0], target_q_value)
@@ -113,24 +128,14 @@ def train(policy: GaussianPolicy,
         q_networks_loss.backward()
         q_networks_optimizer.step()
 
-        # Update policy weights (Eq. 10)
-        action, action_log_prob = policy(batch['observation'])
-        q_values = q_networks(batch['observation'], action)
-        state_value = q_values.min(0)[0] - alpha * action_log_prob
-        policy_loss = -state_value.mean()
-
         # Adjust temperature (Eq. 18)
-        # NB. slight difference between paper and softlearning implementation
+        # NB. paper uses alpha (not log) but we follow the softlearning impln
         # see also https://github.com/rail-berkeley/softlearning/issues/37
-        alpha_loss = -log_alpha * (action_log_prob + target_entropy).detach()
-        alpha_loss = alpha_loss.mean()
-
-        # update alpha and policy carefully (two-way dependency)
-        policy_optimizer.zero_grad()
-        policy_loss.backward()
+        alpha_loss = (
+            -log_alpha * (action_log_prob + target_entropy).detach()
+        ).mean()
         alpha_optimizer.zero_grad()
         alpha_loss.backward()
-        policy_optimizer.step()
         alpha_optimizer.step()
 
         # Update target Q-network weights
