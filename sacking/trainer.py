@@ -4,7 +4,7 @@ import logging
 import os
 import random
 from collections import deque
-from typing import Dict, Optional, Sequence, Tuple, Union
+from typing import Dict, Optional, Sequence, Tuple
 
 import numpy as np
 import torch
@@ -14,12 +14,13 @@ from torch import Tensor
 from torch.nn import functional as F
 from torch.utils.tensorboard import SummaryWriter
 
-from .policy import GaussianPolicy, QNetwork, StackedModule
+from .policy import GaussianPolicy
+from .q_network import QNetwork
 from .typing import Checkpoint, Env, Transition
 
 
 def train(policy: GaussianPolicy,
-          q_network: Union[QNetwork, Sequence[QNetwork]],
+          q_network: QNetwork,
           env: Env,
           *,
           batch_size: int = 256,
@@ -48,15 +49,13 @@ def train(policy: GaussianPolicy,
     os.makedirs(rundir, exist_ok=True)
     writer = SummaryWriter(rundir)
 
-    # stack twin Q functions and create target network
-    q_networks = StackedModule(q_network if isinstance(q_network, Sequence)
-                               else [q_network])
-    target_q_networks = copy.deepcopy(q_networks)
+    # create target network
+    target_q_network = copy.deepcopy(q_network)
 
     log_alpha = torch.tensor([0.0], requires_grad=True)
 
     policy_optimizer = optim.Adam(policy.parameters(), lr=learning_rate)
-    q_networks_optimizer = optim.Adam(q_networks.parameters(), lr=learning_rate)
+    q_network_optimizer = optim.Adam(q_network.parameters(), lr=learning_rate)
     alpha_optimizer = optim.Adam([log_alpha], lr=learning_rate)
 
     replaybuf = deque(maxlen=replay_buffer_size)
@@ -100,16 +99,16 @@ def train(policy: GaussianPolicy,
         # NB. use old policy that hasn't been updated for current batch
         with torch.no_grad():
             next_action, next_action_log_prob = policy(batch['next_observation'])
-            next_q_values = target_q_networks(batch['next_observation'], next_action)
-            next_state_value = next_q_values.min(0)[0] - alpha * next_action_log_prob
+            next_q_values = target_q_network(batch['next_observation'], next_action)
+            next_state_value = next_q_values.min(1)[0] - alpha * next_action_log_prob
             next_state_value *= (~batch['done']).float()
             target_q_value = batch['reward'] + discount * next_state_value
 
         # Update policy weights (Eq. 10)
         # NB. use old Q network that hasn't been updated for current batch
         action, action_log_prob = policy(batch['observation'])
-        q_values = q_networks(batch['observation'], action)
-        state_value = q_values.min(0)[0] - alpha * action_log_prob
+        q_values = q_network(batch['observation'], action)
+        state_value = q_values.min(1)[0] - alpha * action_log_prob
         policy_loss = -state_value.mean()
         policy_optimizer.zero_grad()
         policy_loss.backward()
@@ -119,14 +118,14 @@ def train(policy: GaussianPolicy,
         # NB. Q network must be updated *after* policy update, because
         # we don't want to backprop policy update through a Q network
         # that is overfitted to current batch
-        pred_q_values = q_networks(batch['observation'], batch['action'])
-        q_networks_loss = 0.5 * (
-            F.mse_loss(pred_q_values[0], target_q_value)
-            + F.mse_loss(pred_q_values[1], target_q_value)
+        pred_q_values = q_network(batch['observation'], batch['action'])
+        q_network_loss = 0.5 * (
+            F.mse_loss(pred_q_values[:, 0], target_q_value)
+            + F.mse_loss(pred_q_values[:, 1], target_q_value)
         )
-        q_networks_optimizer.zero_grad()
-        q_networks_loss.backward()
-        q_networks_optimizer.step()
+        q_network_optimizer.zero_grad()
+        q_network_loss.backward()
+        q_network_optimizer.step()
 
         # Adjust temperature (Eq. 18)
         # NB. paper uses alpha (not log) but we follow the softlearning impln
@@ -139,7 +138,7 @@ def train(policy: GaussianPolicy,
         alpha_optimizer.step()
 
         # Update target Q-network weights
-        soft_update(target_q_networks, q_networks,
+        soft_update(target_q_network, q_network,
                     target_network_update_weight)
 
 
@@ -147,10 +146,10 @@ def train(policy: GaussianPolicy,
         os.makedirs(f'{rundir}/checkpoints', exist_ok=True)
         path = f'{rundir}/checkpoints/checkpoint.{step:06d}.pt'
         cp = Checkpoint(policy.state_dict(),
-                        q_networks.state_dict(),
+                        q_network.state_dict(),
                         log_alpha.detach().numpy(),
                         policy_optimizer.state_dict(),
-                        q_networks_optimizer.state_dict(),
+                        q_network_optimizer.state_dict(),
                         alpha_optimizer.state_dict())
         cp.save(path)
         logging.info('saved model checkpoint to %s', path)

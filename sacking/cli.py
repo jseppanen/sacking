@@ -5,7 +5,8 @@ import click
 import gym
 import yaml
 
-from .policy import GaussianPolicy, QNetwork
+from .policy import GaussianPolicy
+from .q_network import QNetwork
 from .trainer import train, simulate
 from .typing import Checkpoint, Env
 from .version import __version__
@@ -39,13 +40,11 @@ def train_cmd(config: str, rundir: str):
     action_dim = env.action_space.shape[0]
     policy = GaussianPolicy(obs_dim, action_dim,
                             hidden_layers=config['policy']['hidden_layers'])
-    q_networks = [
-        QNetwork(obs_dim, action_dim,
-                 hidden_layers=config['q_network']['hidden_layers'])
-        for i in range(config['q_network']['num_heads'])
-    ]
+    q_network = QNetwork(obs_dim, action_dim,
+                         hidden_layers=config['q_network']['hidden_layers'],
+                         num_nets=config['q_network']['num_heads'])
 
-    train(policy, q_networks, env,
+    train(policy, q_network, env,
           batch_size=config['batch_size'],
           learning_rate=config['learning_rate'],
           num_steps=config['num_steps'],

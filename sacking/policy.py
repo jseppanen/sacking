@@ -1,44 +1,19 @@
 
-from typing import Sequence, Tuple, List
+from typing import Sequence
 
 import numpy as np
 import torch
 from torch import Tensor
 from torch import nn
 from torch.distributions import Normal
-from torch.nn import init
 from torch.nn.functional import softplus
 
+from .fc_network import FCNetwork
 from .typing import Checkpoint, PolicyOutput
 
 LOG_STD_MAX = 2
 LOG_STD_MIN = -20
 LOG_PROB_CONST = -0.5 * np.log(2.0 * np.pi)
-
-
-class FCNetwork(nn.Module):
-    """Fully-connected (MLP) network."""
-
-    def __init__(self, input_dim: int, output_dim: int, *,
-                 hidden_layers: Sequence[int] = (64,)):
-        super().__init__()
-
-        sizes: List[int] = [input_dim] + list(hidden_layers) + [output_dim]
-        layers: List[nn.Module] = []
-        for s1, s2 in zip(sizes[:-1], sizes[1:]):
-            fc = nn.Linear(s1, s2)
-            # softlearning initialization
-            init.xavier_uniform_(fc.weight.data)
-            fc.bias.data.fill_(0.0)
-            layers.append(fc)
-            # softlearning activation
-            layers.append(nn.ReLU(inplace=True))
-        # remove final ReLU
-        del layers[-1]
-        self.net = nn.Sequential(*layers)
-
-    def forward(self, input: Tensor) -> Tensor:
-        return self.net(input)
 
 
 class GaussianPolicy(nn.Module):
@@ -105,30 +80,3 @@ class GaussianPolicy(nn.Module):
                      hidden_layers=hidden_layers)
         policy.load_state_dict(state)
         return policy
-
-
-class QNetwork(nn.Module):
-    """Action-value (Q) function with fully-connected (MLP) network."""
-
-    def __init__(self, input_dim: int, action_dim: int, *,
-                 hidden_layers: Sequence[int] = (64,)):
-        super().__init__()
-        self.net = FCNetwork(input_dim + action_dim, 1,
-                             hidden_layers=hidden_layers)
-
-    def forward(self, input: Tensor, action: Tensor) -> Tensor:
-        """Evaluate action value (Q).
-        :returns: action value (Q)
-        """
-        input = torch.cat([input, action], dim=1)
-        value = self.net(input).squeeze(1)
-        return value
-
-
-class StackedModule(nn.Module):
-    def __init__(self, modules: Sequence[nn.Module]):
-        super().__init__()
-        self.submodules = nn.ModuleList(modules)
-
-    def forward(self, *inputs) -> Tensor:
-        return torch.stack([m(*inputs) for m in self.submodules])
