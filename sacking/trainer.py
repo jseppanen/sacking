@@ -73,9 +73,10 @@ def train(policy: GaussianPolicy,
         with torch.no_grad():
             if step < num_initial_exploration_steps:
                 action = env.action_space.sample()
-                action = torch.from_numpy(action)
+                #action = torch.from_numpy(action)
+                action = torch.tensor(action)
             else:
-                action, _ = policy(observation.unsqueeze(0))
+                action, _ = policy.sample_action(observation.unsqueeze(0))
                 action = action.squeeze(0)
 
         # sample transition from the environment
@@ -98,17 +99,25 @@ def train(policy: GaussianPolicy,
         # Update Q targets
         # NB. use old policy that hasn't been updated for current batch
         with torch.no_grad():
-            next_action, next_action_log_prob = policy(batch['next_observation'])
-            next_q_values = target_q_network(batch['next_observation'], next_action)
-            next_state_value = next_q_values.min(1)[0] - alpha * next_action_log_prob
+            next_action_log_probs = policy(batch['next_observation'])
+            next_q_values = target_q_network(batch['next_observation'])
+            next_min_q_value = next_q_values.min(1)[0]
+            next_state_value_dist = next_min_q_value - alpha * next_action_log_probs
+            next_state_value = (
+                next_action_log_probs.exp() * next_state_value_dist
+            ).sum(1)
             next_state_value *= (~batch['done']).float()
             target_q_value = batch['reward'] + discount * next_state_value
 
         # Update policy weights (Eq. 10)
         # NB. use old Q network that hasn't been updated for current batch
-        action, action_log_prob = policy(batch['observation'])
-        q_values = q_network(batch['observation'], action)
-        state_value = q_values.min(1)[0] - alpha * action_log_prob
+        action_log_probs = policy(batch['observation'])
+        q_values = q_network(batch['observation'])
+        min_q_value = q_values.min(1)[0]
+        state_value_dist = min_q_value - alpha * action_log_probs
+        state_value = (
+            action_log_probs.exp() * state_value_dist
+        ).sum(1)
         policy_loss = -state_value.mean()
         policy_optimizer.zero_grad()
         policy_loss.backward()
@@ -118,10 +127,13 @@ def train(policy: GaussianPolicy,
         # NB. Q network must be updated *after* policy update, because
         # we don't want to backprop policy update through a Q network
         # that is overfitted to current batch
-        pred_q_values = q_network(batch['observation'], batch['action'])
-        q_network_loss = 0.5 * (
-            F.mse_loss(pred_q_values[:, 0], target_q_value)
-            + F.mse_loss(pred_q_values[:, 1], target_q_value)
+        pred_q_value_dist = q_network(batch['observation'])
+        ids = range(len(pred_q_value_dist))
+        pred_q_values = pred_q_value_dist[ids, :, batch['action']]
+        assert pred_q_values.dim() == 2 and pred_q_values.shape[1] == 2
+        q_network_loss = F.mse_loss(
+            pred_q_values,
+            target_q_value.unsqueeze(1).expand(pred_q_values.shape)
         )
         q_network_optimizer.zero_grad()
         q_network_loss.backward()
@@ -130,8 +142,9 @@ def train(policy: GaussianPolicy,
         # Adjust temperature (Eq. 18)
         # NB. paper uses alpha (not log) but we follow the softlearning impln
         # see also https://github.com/rail-berkeley/softlearning/issues/37
+        action_entropy = (action_log_probs.exp() * action_log_probs).sum(1)
         alpha_loss = (
-            -log_alpha * (action_log_prob + target_entropy).detach()
+            -log_alpha * (action_entropy + target_entropy).detach()
         ).mean()
         alpha_optimizer.zero_grad()
         alpha_loss.backward()
@@ -173,12 +186,13 @@ def train(policy: GaussianPolicy,
 def validate(policy: GaussianPolicy, env: Env) \
         -> Dict[str, float]:
     """Validate policy on environment"""
+    XXX messes with training episodes because its the same env!
     episode_reward = 0.0
     observation = env.reset()
     done = False
     with torch.no_grad():
         while not done:
-            action, _ = policy(observation.unsqueeze(0), mode='best')
+            action, _ = policy.best_action(observation.unsqueeze(0))
             observation, reward, done, _ = env.step(action.squeeze(0))
             episode_reward += reward
     return {'episode_reward': episode_reward}
@@ -193,7 +207,7 @@ def simulate(policy: GaussianPolicy, env: Env) \
     ui_active = True
     with torch.no_grad():
         while ui_active and not env_done:
-            action, _ = policy(observation.unsqueeze(0), mode='best')
+            action, _ = policy.best_action(observation.unsqueeze(0))
             observation, reward, env_done, _ = env.step(action.squeeze(0))
             ui_active = env.render('human')
 

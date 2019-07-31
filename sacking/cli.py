@@ -5,8 +5,8 @@ import click
 import gym
 import yaml
 
-from .policy import GaussianPolicy
-from .q_network import QNetwork
+from .policy import GaussianPolicy, DiscretePolicy
+from .q_network import QNetwork, DiscreteQNetwork
 from .trainer import train, simulate
 from .typing import Checkpoint, Env
 from .version import __version__
@@ -33,14 +33,18 @@ def train_cmd(config: str, rundir: str):
     env = load_env(config['env'])
 
     assert isinstance(env.observation_space, gym.spaces.Box)
-    assert isinstance(env.action_space, gym.spaces.Box)
     assert len(env.observation_space.shape) == 1
-    assert len(env.action_space.shape) == 1
     obs_dim = env.observation_space.shape[0]
-    action_dim = env.action_space.shape[0]
-    policy = GaussianPolicy(obs_dim, action_dim,
+
+    #assert isinstance(env.action_space, gym.spaces.Box)
+    #assert len(env.action_space.shape) == 1
+    #action_dim = env.action_space.shape[0]
+    assert isinstance(env.action_space, gym.spaces.Discrete)
+    assert len(env.action_space.shape) == 0
+    action_dim = env.action_space.n
+    policy = DiscretePolicy(obs_dim, action_dim,
                             hidden_layers=config['policy']['hidden_layers'])
-    q_network = QNetwork(obs_dim, action_dim,
+    q_network = DiscreteQNetwork(obs_dim, action_dim,
                          hidden_layers=config['q_network']['hidden_layers'],
                          num_nets=config['q_network']['num_heads'])
 

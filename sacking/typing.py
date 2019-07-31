@@ -35,14 +35,6 @@ class EnvStep(NamedTuple):
     done: bool
 
 
-class PolicyOutput(NamedTuple):
-    """Tuple of policy outputs
-    torch.trace only supports tensors and tuples
-    """
-    action: FloatTensor
-    log_prob: Optional[FloatTensor] = None
-
-
 class Transition(NamedTuple):
     """Environment interaction example(s)."""
     observation: np.ndarray  # float32
