@@ -108,6 +108,7 @@ def train(policy: GaussianPolicy,
             ).sum(1)
             next_state_value *= (~batch['done']).float()
             target_q_value = batch['reward'] + discount * next_state_value
+            target_q_values = target_q_value.unsqueeze(1).expand(next_q_values.shape)
 
         # Update policy weights (Eq. 10)
         # NB. use old Q network that hasn't been updated for current batch
@@ -130,11 +131,8 @@ def train(policy: GaussianPolicy,
         pred_q_value_dist = q_network(batch['observation'])
         ids = range(len(pred_q_value_dist))
         pred_q_values = pred_q_value_dist[ids, :, batch['action']]
-        assert pred_q_values.dim() == 2 and pred_q_values.shape[1] == 2
-        q_network_loss = F.mse_loss(
-            pred_q_values,
-            target_q_value.unsqueeze(1).expand(pred_q_values.shape)
-        )
+        assert pred_q_values.shape == target_q_values.shape
+        q_network_loss = F.mse_loss(pred_q_values, target_q_values)
         q_network_optimizer.zero_grad()
         q_network_loss.backward()
         q_network_optimizer.step()
