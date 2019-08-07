@@ -85,6 +85,20 @@ class GaussianPolicy(nn.Module):
             action = torch.tanh(action)
         return GaussianAction(action, log_prob)
 
+    def choose_action(self, observation: np.ndarray, *, mode: str = 'sample') \
+            -> np.ndarray:
+        """Choose action from policy for one observation."""
+        with torch.no_grad():
+            pt_obs = torch.from_numpy(observation).unsqueeze(0)
+            if mode == 'sample':
+                pt_action, _ = self.sample_action(pt_obs)
+            elif mode == 'best':
+                pt_action, _ = self.best_action(pt_obs)
+            else:
+                raise ValueError(mode)
+            action = pt_action.squeeze(0).numpy()
+            return action
+
     @classmethod
     def from_checkpoint(cls, checkpoint: Checkpoint) -> 'GaussianPolicy':
         """Restore Gaussian policy from model checkpoint."""
@@ -153,6 +167,20 @@ class DiscretePolicy(nn.Module):
         _, action = action_log_probs.max(dim=1)
         log_prob = torch.zeros_like(action)
         return DiscreteAction(action, log_prob)
+
+    def choose_action(self, observation: np.ndarray, *, mode: str = 'sample') \
+            -> np.ndarray:
+        """Choose action from policy for one observation."""
+        with torch.no_grad():
+            pt_obs = torch.from_numpy(observation).unsqueeze(0)
+            if mode == 'sample':
+                pt_action, _ = self.sample_action(pt_obs)
+            elif mode == 'best':
+                pt_action, _ = self.best_action(pt_obs)
+            else:
+                raise ValueError(mode)
+            action = pt_action.squeeze(0).numpy()
+            return action
 
     @classmethod
     def from_checkpoint(cls, checkpoint: Checkpoint) -> 'DiscretePolicy':
