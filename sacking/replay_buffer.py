@@ -73,10 +73,10 @@ class EnvSampler:
             action = self._env.action_space.sample()
         # sample transition from the environment
         next_observation, reward, done, _ = self._env.step(action)
-        tr = Transition(self._observation,
+        tr = Transition(self._observation.astype(np.float32),
                         action,
                         np.array([reward], dtype=np.float32),
-                        next_observation,
+                        next_observation.astype(np.float32),
                         np.array([done], dtype=bool))
         if done:
             self._observation = self._env.reset()

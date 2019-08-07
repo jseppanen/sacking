@@ -172,7 +172,7 @@ class DiscretePolicy(nn.Module):
             -> np.ndarray:
         """Choose action from policy for one observation."""
         with torch.no_grad():
-            pt_obs = torch.from_numpy(observation).unsqueeze(0)
+            pt_obs = torch.from_numpy(observation.astype(np.float32)).unsqueeze(0)
             if mode == 'sample':
                 pt_action, _ = self.sample_action(pt_obs)
             elif mode == 'best':
