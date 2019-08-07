@@ -62,6 +62,15 @@ class GaussianPolicy(nn.Module):
             action = torch.tanh(action)
         return PolicyOutput(action, log_prob)
 
+    def choose_action(self, observation: np.ndarray, *, mode: str = 'sample') \
+            -> np.ndarray:
+        """Choose action from policy for one observation."""
+        with torch.no_grad():
+            pt_obs = torch.from_numpy(observation).unsqueeze(0)
+            pt_action, _ = self.forward(pt_obs)
+            action = pt_action.squeeze(0).numpy()
+            return action
+
     @classmethod
     def from_checkpoint(cls, checkpoint: Checkpoint) -> 'GaussianPolicy':
         """Restore Gaussian policy from model checkpoint."""

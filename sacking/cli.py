@@ -5,10 +5,11 @@ import click
 import gym
 import yaml
 
+from .environment import load_env
 from .policy import GaussianPolicy
 from .q_network import QNetwork
 from .trainer import train, simulate
-from .typing import Checkpoint, Env
+from .typing import Checkpoint
 from .version import __version__
 
 
@@ -31,6 +32,7 @@ def train_cmd(config: str, rundir: str):
     config = yaml.safe_load(open(config))
 
     env = load_env(config['env'])
+    valid_env = load_env(config['env'])
 
     assert isinstance(env.observation_space, gym.spaces.Box)
     assert isinstance(env.action_space, gym.spaces.Box)
@@ -48,12 +50,13 @@ def train_cmd(config: str, rundir: str):
           batch_size=config['batch_size'],
           learning_rate=config['learning_rate'],
           num_steps=config['num_steps'],
-          num_initial_exploration_steps=config['num_initial_exploration_steps'],
+          num_initial_exploration_episodes=config['num_initial_exploration_episodes'],
           replay_buffer_size=config['replay_buffer_size'],
           target_network_update_weight=config['target_network_update_weight'],
           progress_interval=config['progress_interval'],
           checkpoint_interval=config['checkpoint_interval'],
-          rundir=rundir
+          rundir=rundir,
+          validation_env=valid_env,
           )
 
 
@@ -69,19 +72,6 @@ def show_cmd(env: str, checkpoint: str):
 
     while True:
         simulate(policy, env)
-
-
-def load_env(full_name: str) -> Env:
-    """Load environment"""
-    assert '/' in full_name
-    env_ns, env_name = full_name.split('/', 1)
-    if env_ns == 'gym':
-        return gym.make(env_name)
-    elif env_ns == 'roboschool':
-        import roboschool
-        return gym.make(env_name)
-    else:
-        raise ValueError(f'unknown env: {full_name}')
 
 
 if __name__ == '__main__':
