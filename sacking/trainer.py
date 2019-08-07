@@ -79,7 +79,7 @@ def train(policy: GaussianPolicy,
             ).sum(1)
             next_state_value *= (~batch['terminal']).float()
             target_q_value = batch['reward'] + discount * next_state_value
-            target_q_values = target_q_value.unsqueeze(1).expand(next_q_values.shape)
+            target_q_values = target_q_value.unsqueeze(1).expand(next_q_values.shape[:-1])
 
         # Update policy weights (Eq. 10)
         action_log_probs = policy(batch['observation'])
