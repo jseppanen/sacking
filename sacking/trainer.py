@@ -45,7 +45,10 @@ def train(policy: GaussianPolicy,
     """
 
     if target_entropy is None:
-        target_entropy = -np.prod(env.action_space.shape)
+        if isinstance(env.action_space, gym.spaces.Box):
+            target_entropy = -np.prod(env.action_space.shape)
+        elif isinstance(env.action_space, gym.spaces.Discrete):
+            target_entropy = -env.action_space.n
 
     os.makedirs(rundir, exist_ok=True)
     writer = SummaryWriter(rundir)
