@@ -41,14 +41,15 @@ ITERATION = 0
 
 
 @torch.no_grad()
-def repro_batch():
-    """Load repro batch from disk."""
+def load_dump():
+    """Load repro batch dump from disk."""
     global ITERATION
-    slbatch = pickle.load(open(f'repro/batch{ITERATION}.pkl', 'rb'))
-    slvalue = pickle.load(open(f'repro/values{ITERATION}.pkl', 'rb'))
-    slweight = pickle.load(open(f'repro/weights{ITERATION}.pkl', 'rb'))
+    dump_path = f'repro/dump{ITERATION}.pkl'
+    dump = pickle.load(open(dump_path, 'rb'))
+    print(f'loaded {dump_path}')
     ITERATION += 1
 
+    slbatch = dump['batch']
     batch = {
         'observation': torch.from_numpy(slbatch['observations']['observations']),
         'action': torch.from_numpy(slbatch['actions']),
@@ -59,7 +60,7 @@ def repro_batch():
     for k in ['reward', 'done']:
         batch[k] = batch[k].squeeze(1)
     batch['done'] = batch['done'].byte()
-    return batch, slvalue, slweight
+    return batch, dump
 
 
 def compare_weights(net, weights):

@@ -17,7 +17,7 @@ from torch.utils.tensorboard import SummaryWriter
 from .policy import GaussianPolicy, QNetwork, StackedModule
 from .typing import Checkpoint, Env, Transition
 
-from .repro import approx, repro_batch, compare_weights
+from .repro import approx, load_dump, compare_weights
 
 
 def train(policy: GaussianPolicy,
@@ -104,33 +104,33 @@ def train(policy: GaussianPolicy,
 
         # XXX repro
         # batch = sample_batch(replaybuf, batch_size)
-        batch, slvalue, slweights = repro_batch()
+        batch, dump = load_dump()
         alpha = log_alpha.exp().detach()
 
         # check weights
         for i in range(2):
-            compare_weights(q_networks.submodules[i].net.net, slweights['Q_weights'][i])
-            compare_weights(target_q_networks.submodules[i].net.net, slweights['Q_target_weights'][i])
-        compare_weights(policy.net.net, slweights['policy_weights'])
-        #assert approx(log_alpha) == slweights['log_alpha']
+            compare_weights(q_networks.submodules[i].net.net, dump['Q_weights'][i])
+            compare_weights(target_q_networks.submodules[i].net.net, dump['Q_target_weights'][i])
+        compare_weights(policy.net.net, dump['policy_weights'])
+        #assert approx(log_alpha) == dump['log_alpha']
 
         # Update Q-function parameters (Eq. 6)
         with torch.no_grad():
             next_action, next_action_log_prob = policy(batch['next_observation'])
-            assert approx(batch['next_observation']) == slvalue['Q_target_next_observations'][0]
-            assert approx(next_action) == slvalue['Q_target_next_actions']
-            assert approx(next_action_log_prob) == slvalue['Q_target_next_log_pis'].flatten()
+            assert approx(batch['next_observation']) == dump['Q_target_next_observations'][0]
+            assert approx(next_action) == dump['Q_target_next_actions']
+            assert approx(next_action_log_prob) == dump['Q_target_next_log_pis'].flatten()
             next_q_values = target_q_networks(batch['next_observation'], next_action)
-            assert approx(next_q_values) == slvalue['Q_target_next_Q_values'][:,:,0]
+            assert approx(next_q_values) == dump['Q_target_next_Q_values'][:,:,0]
             next_state_value = next_q_values.min(0)[0] - alpha * next_action_log_prob
-            assert approx(next_state_value) == slvalue['Q_target_next_values'].flatten()
+            assert approx(next_state_value) == dump['Q_target_next_values'].flatten()
             next_state_value *= (~batch['done']).float()
             target_q_value = batch['reward'] + discount * next_state_value
-            assert approx(target_q_value) == slvalue['Q_target'].flatten()
+            assert approx(target_q_value) == dump['Q_target'].flatten()
 
         pred_q_values = q_networks(batch['observation'], batch['action'])
-        assert approx(pred_q_values[0]) == slvalue['Q_values'][0].flatten()
-        assert approx(pred_q_values[1]) == slvalue['Q_values'][1].flatten()
+        assert approx(pred_q_values[0]) == dump['Q_values'][0].flatten()
+        assert approx(pred_q_values[1]) == dump['Q_values'][1].flatten()
 
         q_networks_loss = 0.5 * (
             F.mse_loss(pred_q_values[0], target_q_value)
@@ -139,23 +139,23 @@ def train(policy: GaussianPolicy,
 
         # Update policy weights (Eq. 10)
         action, action_log_prob = policy(batch['observation'])
-        assert approx(batch['observation']) == slvalue['policy_observations'][0]
-        assert approx(action) == slvalue['policy_actions']
-        assert approx(action_log_prob) == slvalue['policy_log_pis'].flatten()
-        #assert approx(log_alpha) == slvalue['policy_log_alpha'].flatten()
+        assert approx(batch['observation']) == dump['policy_observations'][0]
+        assert approx(action) == dump['policy_actions']
+        assert approx(action_log_prob) == dump['policy_log_pis'].flatten()
+        #assert approx(log_alpha) == dump['policy_log_alpha'].flatten()
         q_values = q_networks(batch['observation'], action)
-        assert approx(q_values) == slvalue['policy_Q_log_targets'][:,:,0]
+        assert approx(q_values) == dump['policy_Q_log_targets'][:,:,0]
         state_value = q_values.min(0)[0] - alpha * action_log_prob
-        assert approx(state_value) == -slvalue['policy_kl_losses'].flatten()
+        assert approx(state_value) == -dump['policy_kl_losses'].flatten()
         policy_loss = -state_value.mean()
-        assert approx(policy_loss) == slvalue['policy_loss']
+        assert approx(policy_loss) == dump['policy_loss']
 
         # Adjust temperature (Eq. 18)
         # NB. slight difference between paper and softlearning implementation
         # see also https://github.com/rail-berkeley/softlearning/issues/37
         alpha_loss = -log_alpha * (action_log_prob + target_entropy).detach()
         alpha_loss = alpha_loss.mean()
-        assert approx(alpha_loss) == slvalue['alpha_loss']
+        assert approx(alpha_loss) == dump['alpha_loss']
 
         # alpha updates before policy: policy backprop uses *new* alpha
         alpha_optimizer.zero_grad()
