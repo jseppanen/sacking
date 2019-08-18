@@ -27,14 +27,30 @@ def repro_glorot_uniform_(tensor: torch.Tensor) -> None:
     tensor[:] = torch.from_numpy(values.T)
 
 
-def repro_normal_sample(shape):
+class ReproNormalSampler:
     """Sample batch from TFP MultivariateNormalDiag."""
-    tf_dist = tfp.distributions.MultivariateNormalDiag(
-        loc=tf.zeros(shape[1]),
-        scale_diag=tf.ones(shape[1]))
-    tf_latents = tf_dist.sample(shape[0], seed=1)
-    latents = SESSION.run(tf_latents)
-    return torch.from_numpy(latents)
+
+    def __init__(self, seed):
+        self.seed = seed
+        self.shape = None
+
+    def _construct(self, shape):
+        self.shape = shape
+        tf_dist = tfp.distributions.MultivariateNormalDiag(
+            loc=tf.zeros(shape[1]),
+            scale_diag=tf.ones(shape[1]))
+        self.tf_latents = tf_dist.sample(shape[0], seed=self.seed)
+
+    def __call__(self, shape):
+        if self.shape is None:
+            self._construct(shape)
+        assert shape == self.shape
+        latents = SESSION.run(self.tf_latents)
+        return torch.from_numpy(latents)
+
+
+repro_normal_sample1 = ReproNormalSampler(1)
+repro_normal_sample2 = ReproNormalSampler(2)
 
 
 ITERATION = 0

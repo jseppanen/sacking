@@ -17,7 +17,7 @@ from torch.utils.tensorboard import SummaryWriter
 from .policy import GaussianPolicy, QNetwork, StackedModule
 from .typing import Checkpoint, Env, Transition
 
-from .repro import approx, load_dump, compare_weights
+from .repro import approx, load_dump, compare_weights, repro_normal_sample1, repro_normal_sample2
 
 
 def train(policy: GaussianPolicy,
@@ -116,7 +116,10 @@ def train(policy: GaussianPolicy,
 
         # Update Q-function parameters (Eq. 6)
         with torch.no_grad():
-            next_action, next_action_log_prob = policy(batch['next_observation'])
+            next_action_latent = repro_normal_sample1(batch['action'].shape)
+            assert approx(next_action_latent) == dump['Q_target_next_action_latents']
+            #XXX next_action, next_action_log_prob = policy(batch['next_observation'])
+            next_action, next_action_log_prob = policy(batch['next_observation'], latent=next_action_latent)
             assert approx(batch['next_observation']) == dump['Q_target_next_observations'][0]
             assert approx(next_action) == dump['Q_target_next_actions']
             assert approx(next_action_log_prob) == dump['Q_target_next_log_pis'].flatten()
@@ -138,7 +141,10 @@ def train(policy: GaussianPolicy,
         )
 
         # Update policy weights (Eq. 10)
-        action, action_log_prob = policy(batch['observation'])
+        action_latent = repro_normal_sample2(batch['action'].shape)
+        assert approx(action_latent) == dump['policy_action_latents']
+        #XXX action, action_log_prob = policy(batch['observation'])
+        action, action_log_prob = policy(batch['observation'], latent=action_latent)
         assert approx(batch['observation']) == dump['policy_observations'][0]
         assert approx(action) == dump['policy_actions']
         assert approx(action_log_prob) == dump['policy_log_pis'].flatten()

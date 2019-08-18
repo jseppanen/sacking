@@ -1,5 +1,5 @@
 
-from typing import Sequence, Tuple, List
+from typing import Sequence, Tuple, List, Optional
 
 import numpy as np
 import torch
@@ -11,7 +11,7 @@ from torch.nn.functional import softplus
 
 from .typing import Checkpoint, PolicyOutput
 
-from .repro import repro_glorot_uniform_, repro_normal_sample
+from .repro import repro_glorot_uniform_
 
 LOG_STD_MAX = 2
 LOG_STD_MIN = -20
@@ -62,7 +62,8 @@ class GaussianPolicy(nn.Module):
         self._squash = squash
 
     def forward(self, input: Tensor, *,
-                mode: str = 'sample') -> PolicyOutput:
+                mode: str = 'sample',
+                latent: Optional[Tensor] = None) -> PolicyOutput:
         """Sample action from policy.
         :returns: action and its log-probability
         """
@@ -72,8 +73,8 @@ class GaussianPolicy(nn.Module):
             action_log_std = action_log_std.clamp(min=LOG_STD_MIN,
                                                   max=LOG_STD_MAX)
             # XXX repro
-            #latent = torch.randn_like(action_mean)
-            latent = repro_normal_sample(action_mean.shape)
+            if latent is None:
+                latent = torch.randn_like(action_mean)
             action = latent * action_log_std.exp() + action_mean
             log_prob = (
                 -0.5 * latent ** 2 - action_log_std + LOG_PROB_CONST
