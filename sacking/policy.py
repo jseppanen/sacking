@@ -154,8 +154,8 @@ class DiscreteDistribution(NamedTuple):
         return DiscreteSample(action, log_prob)
 
     def greedy_action(self) -> DiscreteSample:
-        _, action = self.log_prob.max(dim=1)
-        log_prob = torch.zeros_like(action)
+        tmp, action = self.log_prob.max(dim=1)
+        log_prob = torch.zeros_like(tmp)
         return DiscreteSample(action, log_prob)
 
 
@@ -185,6 +185,7 @@ class DiscretePolicy(nn.Module):
 
     def _action_distribution(self, observation: Tensor) \
             -> DiscreteDistribution:
+        """Calculate action distribution given observation"""
         logits = self.net(observation)
         logprobs = logits - logits.logsumexp(dim=-1, keepdim=True)
         return DiscreteDistribution(logprobs)
