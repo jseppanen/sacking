@@ -22,6 +22,7 @@ from .typing import Checkpoint, Transition
 
 def train(policy: GaussianPolicy,
           q_network: QNetwork,
+          body: nn.Module,
           env: Env,
           *,
           batch_size: int = 256,
@@ -65,6 +66,7 @@ def train(policy: GaussianPolicy,
     policy_optimizer = optim.Adam(policy.parameters(), lr=learning_rate)
     q_network_optimizer = optim.Adam(q_network.parameters(), lr=learning_rate)
     alpha_optimizer = optim.Adam([log_alpha], lr=learning_rate)
+    body_optimizer = optim.Adam(body.parameters(), lr=learning_rate)
 
     replaybuf: List[Transition] = deque(maxlen=replay_buffer_size)
     initialize_replay_buffer(replaybuf, env, num_initial_exploration_episodes, batch_size)
@@ -89,9 +91,10 @@ def train(policy: GaussianPolicy,
         # Update Q targets
         # NB. use old policy that hasn't been updated for current batch
         with torch.no_grad():
-            next_action = policy(batch['next_observation'])
+            next_features = body(batch['next_observation'])
+            next_action = policy(next_features)
             next_v_value = calc_state_value(target_q_network,
-                                            batch['next_observation'],
+                                            next_features,
                                             next_action,
                                             alpha)
             next_v_value *= (~batch['terminal']).float()
@@ -101,23 +104,29 @@ def train(policy: GaussianPolicy,
                 [len(target_q_value), target_q_network.num_nets])
 
         # Update policy weights (Eq. 10)
-        action = policy(batch['observation'])
+        features = body(batch['observation'])
+        action = policy(features)
         v_value = calc_state_value(q_network,
-                                   batch['observation'],
+                                   features,
                                    action,
                                    alpha)
         policy_loss = -v_value.mean()
+
+        body_optimizer.zero_grad()
+
         policy_optimizer.zero_grad()
-        policy_loss.backward()
+        policy_loss.backward(retain_graph=True)
         policy_optimizer.step()
 
         # Update Q-function parameters (Eq. 6)
-        pred_q_values = q_network(batch['observation'], batch['action'])
+        pred_q_values = q_network(features, batch['action'])
         assert pred_q_values.shape == target_q_values.shape
         q_network_loss = F.mse_loss(pred_q_values, target_q_values)
         q_network_optimizer.zero_grad()
         q_network_loss.backward()
         q_network_optimizer.step()
+
+        body_optimizer.step()
 
         # Adjust temperature (Eq. 18)
         # NB. paper uses alpha (not log) but we follow the softlearning impln
@@ -149,7 +158,7 @@ def train(policy: GaussianPolicy,
     # main loop
     for step in range(num_steps):
         # environment step
-        transition = sampler.sample_transition(policy)
+        transition = sampler.sample_transition(policy, body)
         replaybuf.append(transition)
         # optimization step
         if step % update_interval == 0:
@@ -157,7 +166,7 @@ def train(policy: GaussianPolicy,
             optimization_step(batch)
         if step > 0 and step % progress_interval == 0:
             if validation_env:
-                metrics = validate(policy, validation_env, num_episodes=10)
+                metrics = validate(policy, body, validation_env, num_episodes=10)
                 for name in metrics:
                     writer.add_scalar(f'eval/{name}', metrics[name], step)
                 logging.info('step %d reward %f', step, metrics['episode_reward'])
@@ -167,7 +176,7 @@ def train(policy: GaussianPolicy,
     writer.close()
 
 
-def validate(policy: GaussianPolicy, env: Env, *,
+def validate(policy: GaussianPolicy, body: nn.Module, env: Env, *,
              num_episodes: int = 1) \
         -> Dict[str, float]:
     """Validate policy on environment
@@ -179,7 +188,13 @@ def validate(policy: GaussianPolicy, env: Env, *,
         done = False
         with torch.no_grad():
             while not done:
-                action = policy.choose_action(observation, greedy=True)
+                obs = np.array(observation)
+                if body:
+                    # FIXME back and forth
+                    obs = torch.from_numpy(obs).unsqueeze(0)
+                    obs = body(obs)
+                    obs = obs.squeeze(0).numpy()
+                action = policy.choose_action(obs, greedy=True)
                 observation, reward, done, _ = env.step(action)
                 reward_sum += reward
     return {'episode_reward': reward_sum / num_episodes}

@@ -5,6 +5,7 @@ from typing import Dict, Generator, List, Optional, Tuple
 import numpy as np
 import torch
 from torch import Tensor
+from torch import nn
 
 from .environment import Env
 from .policy import GaussianPolicy
@@ -17,7 +18,7 @@ def sample_batch(replaybuf: List[Transition], size: int) \
         -> Batch:
     """Sample batch of transitions from replay buffer."""
     batch = random.sample(replaybuf, size)
-    batch = map(np.stack, zip(*batch))  # transpose
+    batch = map(np.stack, zip(*batch))  # convert to numpy and transpose
     batch = {k: torch.from_numpy(v)
              for k, v in zip(Transition._fields, batch)}
     for k in ['reward', 'terminal']:
@@ -47,6 +48,7 @@ class EnvSampler:
         self._env = env
         self._observation = self._env.reset()
 
+    @torch.no_grad()
     def sample_episode(self, policy: Optional[GaussianPolicy] = None) \
             -> Generator[Transition, None, None]:
         """Sample one episode/trajectory/rollout from environment.
@@ -56,27 +58,37 @@ class EnvSampler:
             tr, done = self._sample(policy)
             yield tr
 
-    def sample_transition(self, policy: Optional[GaussianPolicy] = None) \
+    @torch.no_grad()
+    def sample_transition(self, policy: Optional[GaussianPolicy] = None,
+                          body: Optional[nn.Module] = None) \
             -> Transition:
         """Sample one transition/example from environment.
         """
-        tr, _ = self._sample(policy)
+        tr, _ = self._sample(policy, body)
         return tr
 
-    def _sample(self, policy: Optional[GaussianPolicy]) \
+    @torch.no_grad()
+    def _sample(self, policy: Optional[GaussianPolicy],
+                body: Optional[nn.Module] = None) \
             -> Tuple[Transition, bool]:
         # sample action from the policy
         if policy:
-            action = policy.choose_action(self._observation)
+            obs = np.array(self._observation)
+            if body:
+                # FIXME back and forth
+                obs = torch.from_numpy(obs).unsqueeze(0)
+                obs = body(obs)
+                obs = obs.squeeze(0).numpy()
+            action = policy.choose_action(obs)
         else:
             # sample random action
             action = self._env.action_space.sample()
         # sample transition from the environment
         next_observation, reward, done, _ = self._env.step(action)
-        tr = Transition(self._observation.astype(np.float32),
+        tr = Transition(self._observation,
                         action,
                         np.array([reward], dtype=np.float32),
-                        next_observation.astype(np.float32),
+                        next_observation,
                         np.array([done], dtype=bool))
         if done:
             self._observation = self._env.reset()
