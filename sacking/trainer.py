@@ -157,7 +157,7 @@ def train(policy: GaussianPolicy,
             optimization_step(batch)
         if step > 0 and step % progress_interval == 0:
             if validation_env:
-                metrics = validate(policy, validation_env)
+                metrics = validate(policy, validation_env, num_episodes=10)
                 for name in metrics:
                     writer.add_scalar(f'eval/{name}', metrics[name], step)
                 logging.info('step %d reward %f', step, metrics['episode_reward'])
@@ -167,20 +167,22 @@ def train(policy: GaussianPolicy,
     writer.close()
 
 
-def validate(policy: GaussianPolicy, env: Env) \
+def validate(policy: GaussianPolicy, env: Env, *,
+             num_episodes: int = 1) \
         -> Dict[str, float]:
     """Validate policy on environment
     NB mutates env state!
     """
-    episode_reward = 0.0
-    observation = env.reset()
-    done = False
-    with torch.no_grad():
-        while not done:
-            action = policy.choose_action(observation, greedy=True)
-            observation, reward, done, _ = env.step(action)
-            episode_reward += reward
-    return {'episode_reward': episode_reward}
+    reward_sum = 0.0
+    for _ in range(num_episodes):
+        observation = env.reset()
+        done = False
+        with torch.no_grad():
+            while not done:
+                action = policy.choose_action(observation, greedy=True)
+                observation, reward, done, _ = env.step(action)
+                reward_sum += reward
+    return {'episode_reward': reward_sum / num_episodes}
 
 
 def simulate(policy: GaussianPolicy, env: Env) \
