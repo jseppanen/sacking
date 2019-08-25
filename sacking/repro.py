@@ -71,11 +71,11 @@ def load_dump():
         'action': torch.from_numpy(slbatch['actions']),
         'reward': torch.from_numpy(slbatch['rewards']),
         'next_observation': torch.from_numpy(slbatch['next_observations']['observations']),
-        'done': torch.from_numpy(slbatch['terminals']),
+        'terminal': torch.from_numpy(slbatch['terminals']),
     }
-    for k in ['reward', 'done']:
+    for k in ['reward', 'terminal']:
         batch[k] = batch[k].squeeze(1)
-    batch['done'] = batch['done'].byte()
+    batch['terminal'] = batch['terminal'].byte()
     return batch, dump
 
 
