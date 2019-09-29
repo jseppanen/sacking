@@ -1,4 +1,5 @@
 
+import logging
 import random
 from typing import Dict, Generator, List, Optional, Tuple
 
@@ -47,6 +48,9 @@ class EnvSampler:
     def __init__(self, env: Env):
         self._env = env
         self._observation = self._env.reset()
+        self._ongoing_episode_length = 0
+        self._ongoing_episode_reward = 0.0
+        self.total_episodes = 0
 
     @torch.no_grad()
     def sample_episode(self, policy: Optional[GaussianPolicy] = None) \
@@ -83,8 +87,16 @@ class EnvSampler:
         else:
             # sample random action
             action = self._env.action_space.sample()
+        # XXX pong specific: alias to LEFT/RIGHT only
+        action = (action % 2) + 2
         # sample transition from the environment
         next_observation, reward, done, _ = self._env.step(action)
+        # XXX pong specific: restart life
+        if reward != 0 and not done:
+            next_observation, reward2, done, _ = self._env.step(1)
+            reward += reward2
+        self._ongoing_episode_length += 1
+        self._ongoing_episode_reward += reward
         tr = Transition(self._observation,
                         action,
                         np.array([reward], dtype=np.float32),
@@ -92,6 +104,12 @@ class EnvSampler:
                         np.array([done], dtype=bool))
         if done:
             self._observation = self._env.reset()
+            self.total_episodes += 1
+            logging.info(f'episode {self.total_episodes} '
+                         f'length {self._ongoing_episode_length} '
+                         f'reward {self._ongoing_episode_reward}')
+            self._ongoing_episode_length = 0
+            self._ongoing_episode_reward = 0.0
         else:
             self._observation = next_observation
         return tr, done

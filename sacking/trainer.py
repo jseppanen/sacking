@@ -66,7 +66,10 @@ def train(policy: GaussianPolicy,
     policy_optimizer = optim.Adam(policy.parameters(), lr=learning_rate)
     q_network_optimizer = optim.Adam(q_network.parameters(), lr=learning_rate)
     alpha_optimizer = optim.Adam([log_alpha], lr=learning_rate)
-    body_optimizer = optim.Adam(body.parameters(), lr=learning_rate)
+    if list(body.parameters()):
+        body_optimizer = optim.Adam(body.parameters(), lr=learning_rate)
+    else:
+        body_optimizer = None
 
     replaybuf: List[Transition] = deque(maxlen=replay_buffer_size)
     initialize_replay_buffer(replaybuf, env, num_initial_exploration_episodes, batch_size)
@@ -112,7 +115,8 @@ def train(policy: GaussianPolicy,
                                    alpha)
         policy_loss = -v_value.mean()
 
-        body_optimizer.zero_grad()
+        if body_optimizer:
+            body_optimizer.zero_grad()
 
         policy_optimizer.zero_grad()
         policy_loss.backward(retain_graph=True)
@@ -126,7 +130,8 @@ def train(policy: GaussianPolicy,
         q_network_loss.backward()
         q_network_optimizer.step()
 
-        body_optimizer.step()
+        if body_optimizer:
+            body_optimizer.step()
 
         # Adjust temperature (Eq. 18)
         # NB. paper uses alpha (not log) but we follow the softlearning impln
@@ -160,6 +165,7 @@ def train(policy: GaussianPolicy,
         # environment step
         transition = sampler.sample_transition(policy, body)
         replaybuf.append(transition)
+        #env.render()
         # optimization step
         if step % update_interval == 0:
             batch = sample_batch(replaybuf, batch_size)
