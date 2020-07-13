@@ -13,6 +13,11 @@ from torch import FloatTensor, LongTensor
 from torch.nn import functional as F
 from torch.utils.tensorboard import SummaryWriter
 
+try:
+    import wandb
+except ImportError:
+    wandb = None
+
 from .environment import Env
 from .policy import GaussianPolicy, PolicyOutput
 from .q_network import QNetwork
@@ -56,6 +61,17 @@ def train(policy: GaussianPolicy,
 
     os.makedirs(rundir, exist_ok=True)
     writer = SummaryWriter(rundir)
+    if wandb and wandb.run:
+        wandb.config.update(dict(
+            batch_size=batch_size,
+            replay_buffer_size=replay_buffer_size,
+            learning_rate=learning_rate,
+            discount=discount,
+            num_steps=num_steps,
+            num_initial_exploration_episodes=num_initial_exploration_episodes,
+            target_network_update_weight=target_network_update_weight,
+            target_entropy=target_entropy,
+        ))
 
     # create target network
     target_q_network = copy.deepcopy(q_network)
@@ -144,6 +160,8 @@ def train(policy: GaussianPolicy,
                         q_network_optimizer.state_dict(),
                         alpha_optimizer.state_dict())
         cp.save(path)
+        if wandb and wandb.run:
+            wandb.save(path)
         logging.info('saved model checkpoint to %s', path)
 
     # main loop
@@ -160,6 +178,8 @@ def train(policy: GaussianPolicy,
                 metrics = validate(policy, validation_env, num_episodes=10)
                 for name in metrics:
                     writer.add_scalar(f'eval/{name}', metrics[name], step)
+                if wandb and wandb.run:
+                    wandb.log(metrics, step=step)
                 logging.info('step %d reward %f', step, metrics['episode_reward'])
         if step > 0 and step % checkpoint_interval == 0:
             save_checkpoint(step)
