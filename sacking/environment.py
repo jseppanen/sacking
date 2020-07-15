@@ -42,3 +42,14 @@ def load_env(full_name: str) -> Env:
         return gym.make(env_name)
     else:
         raise ValueError(f'unknown env: {full_name}')
+
+
+class NormalizedActionEnv(gym.Wrapper):
+    """Normalize continuous actions to (-1, 1)."""
+
+    def step(self, action: np.ndarray) -> "EnvStep":
+        if isinstance(self.action_space, gym.spaces.Box):
+            action = 0.5 * (action + 1.0)
+            action = action * self.action_space.high + (1.0 - action) * self.action_space.low
+            action = np.clip(action, self.action_space.low, self.action_space.high)
+        return self.env.step(action)

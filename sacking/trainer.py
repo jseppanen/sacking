@@ -18,7 +18,7 @@ try:
 except ImportError:
     wandb = None
 
-from .environment import Env
+from .environment import Env, NormalizedActionEnv
 from .policy import GaussianPolicy, PolicyOutput
 from .q_network import QNetwork
 from .replay_buffer import Batch, EnvSampler, initialize_replay_buffer, sample_batch
@@ -58,6 +58,10 @@ def train(policy: GaussianPolicy,
             target_entropy = -env.action_space.n
         else:
             raise TypeError(env.action_space)
+
+    env = NormalizedActionEnv(env)
+    if validation_env:
+        validation_env = NormalizedActionEnv(validation_env)
 
     os.makedirs(rundir, exist_ok=True)
     writer = SummaryWriter(rundir)
