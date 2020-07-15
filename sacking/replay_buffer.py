@@ -1,4 +1,4 @@
-
+import logging
 import random
 from typing import Dict, Generator, List, Optional, Tuple
 
@@ -46,6 +46,9 @@ class EnvSampler:
     def __init__(self, env: Env):
         self._env = env
         self._observation = self._env.reset()
+        self._ongoing_episode_length = 0
+        self._ongoing_episode_return = 0.0
+        self.total_episodes = 0
 
     def sample_episode(self, policy: Optional[GaussianPolicy] = None) \
             -> Generator[Transition, None, None]:
@@ -73,13 +76,27 @@ class EnvSampler:
             action = self._env.action_space.sample()
         # sample transition from the environment
         next_observation, reward, done, _ = self._env.step(action)
+        self._ongoing_episode_length += 1
+        self._ongoing_episode_return += reward
+        if self._ongoing_episode_length == self._env.spec.max_episode_steps:
+            assert done
+            # reaching time limit is not true episode termination
+            terminal = False
+        else:
+            terminal = done
         tr = Transition(self._observation.astype(np.float32),
                         action,
                         np.array([reward], dtype=np.float32),
                         next_observation.astype(np.float32),
-                        np.array([done], dtype=bool))
+                        np.array([terminal], dtype=bool))
         if done:
             self._observation = self._env.reset()
+            self.total_episodes += 1
+            logging.info(f'episode {self.total_episodes} '
+                         f'length {self._ongoing_episode_length} '
+                         f'return {self._ongoing_episode_return}')
+            self._ongoing_episode_length = 0
+            self._ongoing_episode_return = 0.0
         else:
             self._observation = next_observation
         return tr, done
