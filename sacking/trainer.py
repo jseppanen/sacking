@@ -39,6 +39,7 @@ def train(policy: GaussianPolicy,
           progress_interval: int = 1000,
           checkpoint_interval: int = 10000,
           target_network_update_weight: float = 5e-3,
+          temperature: Optional[float] = None,
           target_entropy: Optional[float] = None,
           rundir: str = 'runs',
           validation_env: Optional[Env] = None) -> None:
@@ -50,14 +51,18 @@ def train(policy: GaussianPolicy,
     :param update_interval: Environment steps between each optimization step
     """
 
-    if target_entropy is None:
+    optimize_alpha = bool(temperature is None)
+    if optimize_alpha and target_entropy is None:
         import gym
         if isinstance(env.action_space, gym.spaces.Box):
             target_entropy = -np.prod(env.action_space.shape)
         elif isinstance(env.action_space, gym.spaces.Discrete):
-            target_entropy = -env.action_space.n
+            target_entropy = -np.log(env.action_space.n)
         else:
             raise TypeError(env.action_space)
+        temperature = 1.0
+    elif temperature is not None and target_entropy is not None:
+        raise TypeError("use only one of temperature or target_entropy, not both")
 
     env = NormalizedActionEnv(env)
     if validation_env:
@@ -80,7 +85,7 @@ def train(policy: GaussianPolicy,
     # create target network
     target_q_network = copy.deepcopy(q_network)
 
-    log_alpha = torch.tensor([0.0], requires_grad=True)
+    log_alpha = torch.tensor([np.log(temperature)], requires_grad=optimize_alpha)
 
     policy_optimizer = optim.Adam(policy.parameters(), lr=learning_rate)
     q_network_optimizer = optim.Adam(q_network.parameters(), lr=learning_rate)
@@ -142,13 +147,14 @@ def train(policy: GaussianPolicy,
         # Adjust temperature (Eq. 18)
         # NB. paper uses alpha (not log) but we follow the softlearning impln
         # see also https://github.com/rail-berkeley/softlearning/issues/37
-        action_entropy = action.average(action.log_prob)
-        alpha_loss = (
-            -log_alpha * (action_entropy + target_entropy).detach()
-        ).mean()
-        alpha_optimizer.zero_grad()
-        alpha_loss.backward()
-        alpha_optimizer.step()
+        if optimize_alpha:
+            action_entropy = action.average(action.log_prob)
+            alpha_loss = (
+                -log_alpha * (action_entropy + target_entropy).detach()
+            ).mean()
+            alpha_optimizer.zero_grad()
+            alpha_loss.backward()
+            alpha_optimizer.step()
 
         # Update target Q-network weights
         soft_update(target_q_network, q_network,
