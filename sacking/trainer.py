@@ -114,7 +114,7 @@ def train(policy: GaussianPolicy,
                                             batch['next_observation'],
                                             next_action,
                                             alpha)
-            next_v_value *= (~batch['terminal']).float()
+            next_v_value *= (~batch['terminal'].bool()).float()
             target_q_value = batch['reward'] + discount * next_v_value
             # replicate same target for all Q networks
             target_q_values = target_q_value.unsqueeze(1).expand(

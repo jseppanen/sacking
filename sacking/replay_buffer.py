@@ -22,7 +22,7 @@ def sample_batch(replaybuf: List[Transition], size: int) \
              for k, v in zip(Transition._fields, batch)}
     for k in ['reward', 'terminal']:
         batch[k] = batch[k].squeeze(1)
-    batch['terminal'] = batch['terminal'].byte()
+    batch['terminal'] = batch['terminal'].bool()
     return batch
 
 
