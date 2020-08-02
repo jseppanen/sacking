@@ -217,7 +217,8 @@ class DiscretePolicy(nn.Module):
         state = checkpoint.policy
         num_layers = len(state) // 2
         _, input_dim = state['net.net.0.weight'].shape
-        action_dim = len(state[f'net.net.{(num_layers - 1)}.bias'])
+        output_dim = len(state[f'net.net.{2 * (num_layers - 1)}.bias'])
+        action_dim = output_dim
         hidden_layers = [
             len(state[f'net.net.{2 * i}.bias'])
             for i in range(num_layers - 1)
