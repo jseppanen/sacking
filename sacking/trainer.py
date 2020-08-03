@@ -13,7 +13,12 @@ from torch import FloatTensor, LongTensor
 from torch.nn import functional as F
 from torch.utils.tensorboard import SummaryWriter
 
-from .environment import Env
+try:
+    import wandb
+except ImportError:
+    wandb = None
+
+from .environment import Env, NormalizedActionEnv
 from .policy import GaussianPolicy, PolicyOutput
 from .q_network import QNetwork
 from .replay_buffer import Batch, EnvSampler, initialize_replay_buffer, sample_batch
@@ -35,6 +40,7 @@ def train(policy: GaussianPolicy,
           progress_interval: int = 1000,
           checkpoint_interval: int = 10000,
           target_network_update_weight: float = 5e-3,
+          temperature: Optional[float] = None,
           target_entropy: Optional[float] = None,
           rundir: str = 'runs',
           validation_env: Optional[Env] = None) -> None:
@@ -46,22 +52,41 @@ def train(policy: GaussianPolicy,
     :param update_interval: Environment steps between each optimization step
     """
 
-    if target_entropy is None:
+    optimize_alpha = bool(temperature is None)
+    if optimize_alpha and target_entropy is None:
         import gym
         if isinstance(env.action_space, gym.spaces.Box):
             target_entropy = -np.prod(env.action_space.shape)
         elif isinstance(env.action_space, gym.spaces.Discrete):
-            target_entropy = -env.action_space.n
+            target_entropy = -np.log(env.action_space.n)
         else:
             raise TypeError(env.action_space)
+        temperature = 1.0
+    elif temperature is not None and target_entropy is not None:
+        raise TypeError("use only one of temperature or target_entropy, not both")
+
+    env = NormalizedActionEnv(env)
+    if validation_env:
+        validation_env = NormalizedActionEnv(validation_env)
 
     os.makedirs(rundir, exist_ok=True)
     writer = SummaryWriter(rundir)
+    if wandb and wandb.run:
+        wandb.config.update(dict(
+            batch_size=batch_size,
+            replay_buffer_size=replay_buffer_size,
+            learning_rate=learning_rate,
+            discount=discount,
+            num_steps=num_steps,
+            num_initial_exploration_episodes=num_initial_exploration_episodes,
+            target_network_update_weight=target_network_update_weight,
+            target_entropy=target_entropy,
+        ))
 
     # create target network
     target_q_network = copy.deepcopy(q_network)
 
-    log_alpha = torch.tensor([0.0], requires_grad=True)
+    log_alpha = torch.tensor([np.log(temperature)], requires_grad=optimize_alpha)
 
     policy_optimizer = optim.Adam(policy.parameters(), lr=learning_rate)
     q_network_optimizer = optim.Adam(q_network.parameters(), lr=learning_rate)
@@ -100,7 +125,7 @@ def train(policy: GaussianPolicy,
                                             next_features,
                                             next_action,
                                             alpha)
-            next_v_value *= (~batch['terminal']).float()
+            next_v_value *= (~batch['terminal'].bool()).float()
             target_q_value = batch['reward'] + discount * next_v_value
             # replicate same target for all Q networks
             target_q_values = target_q_value.unsqueeze(1).expand(
@@ -136,13 +161,14 @@ def train(policy: GaussianPolicy,
         # Adjust temperature (Eq. 18)
         # NB. paper uses alpha (not log) but we follow the softlearning impln
         # see also https://github.com/rail-berkeley/softlearning/issues/37
-        action_entropy = action.average(action.log_prob)
-        alpha_loss = (
-            -log_alpha * (action_entropy + target_entropy).detach()
-        ).mean()
-        alpha_optimizer.zero_grad()
-        alpha_loss.backward()
-        alpha_optimizer.step()
+        if optimize_alpha:
+            action_entropy = action.average(action.log_prob)
+            alpha_loss = (
+                -log_alpha * (action_entropy + target_entropy).detach()
+            ).mean()
+            alpha_optimizer.zero_grad()
+            alpha_loss.backward()
+            alpha_optimizer.step()
 
         # Update target Q-network weights
         soft_update(target_q_network, q_network,
@@ -158,6 +184,8 @@ def train(policy: GaussianPolicy,
                         q_network_optimizer.state_dict(),
                         alpha_optimizer.state_dict())
         cp.save(path)
+        if wandb and wandb.run:
+            wandb.save(path)
         logging.info('saved model checkpoint to %s', path)
 
     # main loop
@@ -175,6 +203,8 @@ def train(policy: GaussianPolicy,
                 metrics = validate(policy, body, validation_env, num_episodes=10)
                 for name in metrics:
                     writer.add_scalar(f'eval/{name}', metrics[name], step)
+                if wandb and wandb.run:
+                    wandb.log(metrics, step=step)
                 logging.info('step %d reward %f', step, metrics['episode_reward'])
         if step > 0 and step % checkpoint_interval == 0:
             save_checkpoint(step)

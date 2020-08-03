@@ -14,8 +14,8 @@ def main():
            or os.environ.get('MKL_NUM_THREADS') != '1'):
         warnings.warn('running without OMP_NUM_THREADS=1 MKL_NUM_THREADS=1')
 
-    env = load_env('roboschool/RoboschoolInvertedPendulum-v1')
-    valid_env = load_env('roboschool/RoboschoolInvertedPendulum-v1')
+    env = load_env('roboschool/RoboschoolHalfCheetah-v1')
+    valid_env = load_env('roboschool/RoboschoolHalfCheetah-v1')
 
     assert isinstance(env.observation_space, gym.spaces.Box)
     assert len(env.observation_space.shape) == 1
@@ -26,18 +26,19 @@ def main():
     action_dim = env.action_space.shape[0]
 
     q_network = QNetwork(obs_dim, action_dim,
-                         hidden_layers=[64, 64],
+                         hidden_layers=[256, 256],
                          num_nets=2)
     policy = GaussianPolicy(obs_dim, action_dim,
-                            hidden_layers=[64, 64])
+                            hidden_layers=[256, 256])
 
     train(
         policy, q_network, env,
-        batch_size=128,
-        learning_rate=0.001,
-        num_steps=100000,
-        replay_buffer_size=100000,
+        batch_size=256,
+        learning_rate=3.0e-4,
+        num_steps=3000000,
+        replay_buffer_size=1000000,
         rundir='output',
+        checkpoint_interval=50000,
         validation_env=valid_env,
     )
 

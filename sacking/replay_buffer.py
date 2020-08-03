@@ -1,4 +1,7 @@
+<<<<<<< HEAD
 
+=======
+>>>>>>> master
 import logging
 import random
 from typing import Dict, Generator, List, Optional, Tuple
@@ -24,7 +27,7 @@ def sample_batch(replaybuf: List[Transition], size: int) \
              for k, v in zip(Transition._fields, batch)}
     for k in ['reward', 'terminal']:
         batch[k] = batch[k].squeeze(1)
-    batch['terminal'] = batch['terminal'].byte()
+    batch['terminal'] = batch['terminal'].bool()
     return batch
 
 
@@ -97,11 +100,17 @@ class EnvSampler:
             reward += reward2
         self._ongoing_episode_length += 1
         self._ongoing_episode_reward += reward
-        tr = Transition(self._observation,
+        if self._ongoing_episode_length == self._env.spec.max_episode_steps:
+            assert done
+            # reaching time limit is not true episode termination
+            terminal = False
+        else:
+            terminal = done
+        tr = Transition(self._observation.astype(np.float32),
                         action,
                         np.array([reward], dtype=np.float32),
-                        next_observation,
-                        np.array([done], dtype=bool))
+                        next_observation.astype(np.float32),
+                        np.array([terminal], dtype=bool))
         if done:
             self._observation = self._env.reset()
             self.total_episodes += 1
