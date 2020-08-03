@@ -1,7 +1,3 @@
-<<<<<<< HEAD
-
-=======
->>>>>>> master
 import logging
 import random
 from typing import Dict, Generator, List, Optional, Tuple
