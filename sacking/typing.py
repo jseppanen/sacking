@@ -1,19 +1,8 @@
 
-from typing import Dict, NamedTuple, Optional, Union
-from typing_extensions import Protocol
+from typing import Dict, NamedTuple
 
 import numpy as np
 import torch
-from torch import FloatTensor
-
-
-class Transition(NamedTuple):
-    """Environment interaction example(s)."""
-    observation: np.ndarray  # float32
-    action: np.ndarray  # float32
-    reward: np.ndarray  # float32
-    next_observation: np.ndarray  # float32
-    terminal: np.ndarray  # bool
 
 
 class Checkpoint(NamedTuple):

@@ -2,7 +2,6 @@
 import copy
 import logging
 import os
-from collections import deque
 from typing import Dict, Optional, List
 
 import numpy as np
@@ -22,8 +21,8 @@ from .environment import Env, NormalizedActionEnv
 from .measurements import Measurements
 from .policy import GaussianPolicy, PolicyOutput
 from .q_network import QNetwork
-from .replay_buffer import Batch, Datagen, initialize_replay_buffer, sample_batch
-from .typing import Checkpoint, Transition
+from .replay_buffer import Batch, Datagen, ReplayBuffer
+from .typing import Checkpoint
 
 
 def train(policy: GaussianPolicy,
@@ -93,9 +92,9 @@ def train(policy: GaussianPolicy,
     q_network_optimizer = optim.Adam(q_network.parameters(), lr=learning_rate)
     alpha_optimizer = optim.Adam([log_alpha], lr=learning_rate)
 
-    replaybuf: List[Transition] = deque(maxlen=replay_buffer_size)
+    replaybuf = ReplayBuffer(replay_buffer_size)
     sampler = Datagen(env)
-    initialize_replay_buffer(replaybuf, sampler, num_initial_exploration_episodes, batch_size)
+    replaybuf.initialize(sampler, num_initial_exploration_episodes, batch_size)
 
     def calc_state_value(q_network: QNetwork,
                          observation: FloatTensor,
@@ -107,7 +106,7 @@ def train(policy: GaussianPolicy,
                     else q_network(observation))
         min_q_value = q_values.min(1)[0]
         value = output.average(min_q_value - alpha * output.log_prob)
-        return value, q_values
+        return value
 
     def optimization_step(batch: Batch) -> None:
 
@@ -116,9 +115,10 @@ def train(policy: GaussianPolicy,
         # Update Q targets
         # NB. use old policy that hasn't been updated for current batch
         with torch.no_grad():
-            next_action = policy(batch['next_observation'])
-            next_v_value, _ = calc_state_value(
-                target_q_network, batch['next_observation'], next_action, alpha
+            next_action_dist = policy(batch['next_observation'])
+            next_action_params = next_action_dist.reparameterize()
+            next_v_value = calc_state_value(
+                target_q_network, batch['next_observation'], next_action_params, alpha
             )
             next_v_value *= (~batch['terminal'].bool()).float()
             target_q_value = batch['reward'] + discount * next_v_value
@@ -127,20 +127,22 @@ def train(policy: GaussianPolicy,
                 [len(target_q_value), target_q_network.num_nets])
 
         # Update policy weights (Eq. 10)
-        action = policy(batch['observation'], measure=True)
-        action_entropy = -action.average(action.log_prob)
-        v_value, q_values = calc_state_value(
-            q_network, batch['observation'], action, alpha
+        action_dist = policy(batch['observation'])
+        action_params = action_dist.reparameterize(measure=True)
+        v_value = calc_state_value(
+            q_network, batch['observation'], action_params, alpha
         )
         policy_losses = -v_value
         policy_loss = policy_losses.mean()
         policy_optimizer.zero_grad()
         policy_loss.backward()
         policy_optimizer.step()
+        action_entropy = action_params.entropy()
+        action_logp = action_dist.log_prob(batch["action"])
         Measurements.update({
             "policy/entropy": action_entropy,
-            "policy/q_value": q_values.flatten(),
             "policy/temperature": alpha,
+            "policy/ips": (action_logp - batch['log_propensity']).exp(),
             "losses/policy": policy_losses,
         })
 
@@ -197,19 +199,15 @@ def train(policy: GaussianPolicy,
         replaybuf.append(transition)
         # optimization step
         if step % update_interval == 0:
-            batch = sample_batch(replaybuf, batch_size)
+            batch = replaybuf.sample_batch(batch_size)
             optimization_step(batch)
         if step > 0 and step % progress_interval == 0:
             if validation_env:
-                metrics = validate(policy, validation_env, num_episodes=10)
-                for key in metrics:
-                    Measurements.update(
-                        {f"eval/{key}": metrics[key] for key in metrics}
-                    )
+                metrics = validate(policy, q_network, validation_env, num_episodes=10)
                 logging.info('step %d eval episode length %.0f return %f',
                              step,
-                             np.mean(metrics['episode_length']),
-                             np.mean(metrics['episode_return']))
+                             metrics['episode_length'],
+                             metrics['episode_return'])
             measurements.report(writer, step)
             writer.add_scalar("datagen/total_episodes", sampler.total_episodes, step)
             writer.add_scalar("datagen/total_steps", sampler.total_steps, step)
@@ -224,30 +222,44 @@ def train(policy: GaussianPolicy,
     writer.close()
 
 
-def validate(policy: GaussianPolicy, env: Env, *,
+@torch.no_grad()
+def validate(policy: GaussianPolicy, q_network: QNetwork, env: Env, *,
              num_episodes: int = 1) \
         -> Dict[str, List[float]]:
     """Validate policy on environment
     NB mutates env state!
     """
-    episode_returns = []
-    episode_lengths = []
+    total_return = 0.0
+    total_steps = 0
     for _ in range(num_episodes):
+        observations = []
+        actions = []
+        rewards = []
         observation = env.reset()
         done = False
-        ongoing_return = 0.0
-        ongoing_length = 0
-        with torch.no_grad():
-            while not done:
-                action = policy.choose_action(observation, greedy=True)
-                observation, reward, done, _ = env.step(action)
-                ongoing_return += reward
-                ongoing_length += 1
-        episode_returns.append(ongoing_return)
-        episode_lengths.append(ongoing_length)
+        while not done:
+            action, _ = policy.choose_action(observation, greedy=True)
+            observations.append(observation)
+            actions.append(action)
+            observation, reward, done, _ = env.step(action)
+            rewards.append(reward)
+            total_return += reward
+            total_steps += 1
+        observations = torch.tensor(np.stack(observations), dtype=torch.float32)
+        actions = torch.tensor(np.stack(actions))
+        rewards = torch.tensor(rewards)
+        returns = torch.cumsum(rewards.flip(0), 0).flip(0)
+        q_values = q_network(observations, actions)
+        Measurements.update({
+            "eval/episode_return": sum(rewards).item(),
+            "eval/episode_length": len(rewards),
+            "eval/q_value": q_values.flatten(),
+            "eval/q_value_error": q_values[:, 0] - returns,
+            "eval/q_value_r2_score": r2_score(returns, q_values[:, 0]),
+        })
     return {
-        "episode_return": episode_returns,
-        "episode_length": episode_lengths,
+        "episode_return": total_return / num_episodes,
+        "episode_length": total_steps / num_episodes,
     }
 
 
@@ -261,7 +273,7 @@ def simulate(policy: GaussianPolicy, env: Env) \
     ui_active = True
     with torch.no_grad():
         while ui_active and not env_done:
-            action = policy.choose_action(observation, greedy=True)
+            action, _ = policy.choose_action(observation, greedy=True)
             observation, _, env_done, _ = env.step(action)
             ui_active = env.render('human')
 
@@ -276,3 +288,13 @@ def soft_update(target_network: nn.Module, network: nn.Module, tau: float) \
             continue
         new_param = tau * param.data + (1.0 - tau) * targ_param.data
         targ_param.data.copy_(new_param)
+
+
+@torch.no_grad()
+def r2_score(target: FloatTensor, input: FloatTensor) -> float:
+    """Calculate R^2 score."""
+    assert target.shape == input.shape
+    return 1.0 - (
+        (target - input).pow(2).sum()
+        / (target - target.mean()).pow(2).sum()
+    ).item()

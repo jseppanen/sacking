@@ -1,5 +1,5 @@
 
-from typing import NamedTuple, Optional, Sequence
+from typing import NamedTuple, Optional, Sequence, Tuple
 from typing_extensions import Protocol
 
 import numpy as np
@@ -31,6 +31,12 @@ class SquashNormalSample(NamedTuple):
     """Reparametrized sample from squashed normal action distribution"""
     action: FloatTensor
     log_prob: FloatTensor
+
+    def average(self, x: FloatTensor) -> FloatTensor:
+        return x
+
+    def entropy(self) -> FloatTensor:
+        return -self.log_prob
 
 
 class SquashNormalDistribution(NamedTuple):
@@ -68,14 +74,24 @@ class SquashNormalDistribution(NamedTuple):
             action = torch.tanh(action)
         return SquashNormalSample(action, log_prob)
 
+    def reparameterize(self, *, measure: bool = False) -> PolicyOutput:
+        # reparameterization trick
+        return self.sample_action(measure=measure)
 
-class GaussianPolicyOutput(SquashNormalSample):
-    """Action from gaussian policy.
-    torch.trace only supports tensors and tuples
-    """
-
-    def average(self, x: FloatTensor) -> FloatTensor:
-        return x
+    def log_prob(self, action: FloatTensor) -> FloatTensor:
+        if self.squash:
+            action = atanh(action)
+        action_log_std = self.action_log_std.clamp(
+            min=LOG_STD_MIN, max=LOG_STD_MAX)
+        latent = (action - self.action_mean) / action_log_std.exp()
+        log_prob = (
+            -0.5 * latent ** 2 - action_log_std + LOG_PROB_CONST
+        ).sum(1)
+        if self.squash:
+            log_prob = log_prob - 2.0 * (
+                np.log(2.0) - action - softplus(-2.0 * action)
+            ).sum(1)
+        return log_prob
 
 
 class GaussianPolicy(nn.Module):
@@ -102,26 +118,22 @@ class GaussianPolicy(nn.Module):
         mean, log_std = stats.chunk(2, dim=-1)
         return SquashNormalDistribution(mean, log_std, self._squash)
 
-    def forward(self, observation: Tensor, *, measure: bool = False) -> GaussianPolicyOutput:
-        """Sample action from policy.
+    def forward(self, observation: Tensor) -> SquashNormalDistribution:
+        """Get .
         :returns: action and its log-probability
         """
-        dist = self._action_distribution(observation)
-        sample = dist.sample_action(measure=measure)
-        return GaussianPolicyOutput(*sample)
+        return self._action_distribution(observation)
 
+    @torch.no_grad()
     def choose_action(self, observation: np.ndarray, *, greedy: bool = False) \
-            -> np.ndarray:
+            -> Tuple[np.ndarray, np.float32]:
         """Choose action from policy for one observation."""
-        with torch.no_grad():
-            pt_obs = torch.from_numpy(observation).unsqueeze(0).float()
-            dist = self._action_distribution(pt_obs)
-            if greedy:
-                pt_action = dist.greedy_action().action
-            else:
-                pt_action = dist.sample_action().action
-            action = pt_action.squeeze(0).numpy()
-            return action
+        pt_obs = torch.from_numpy(observation).unsqueeze(0).float()
+        dist = self._action_distribution(pt_obs)
+        sample = dist.greedy_action() if greedy else dist.sample_action()
+        action = sample.action.squeeze(0).numpy()
+        logp = sample.log_prob.numpy()[0]
+        return action, logp
 
     @classmethod
     def from_checkpoint(cls, checkpoint: Checkpoint) -> 'GaussianPolicy':
@@ -152,28 +164,39 @@ class DiscreteSample(NamedTuple):
 class DiscreteDistribution(NamedTuple):
     """Discrete action distribution.
     """
-    log_prob: FloatTensor
+    log_probs: FloatTensor
 
     def sample_action(self) -> DiscreteSample:
-        dist = Categorical(logits=self.log_prob)
+        dist = Categorical(logits=self.log_probs)
         action = dist.sample()
         log_prob = dist.log_prob(action)
         return DiscreteSample(action, log_prob)
 
     def greedy_action(self) -> DiscreteSample:
-        tmp, action = self.log_prob.max(dim=1)
+        tmp, action = self.log_probs.max(dim=1)
         log_prob = torch.zeros_like(tmp)
         return DiscreteSample(action, log_prob)
 
+    def reparameterize(self, *, measure: bool = False) -> "DiscreteParameters":
+        return DiscreteParameters(*self)
 
-class DiscretePolicyOutput(DiscreteDistribution):
+    def log_prob(self, action: LongTensor) -> FloatTensor:
+        ii = torch.arange(action.shape[0])
+        return self.log_probs[ii, action]
+
+
+class DiscreteParameters(NamedTuple):
     """Action distribution from discrete policy
     torch.trace only supports tensors and tuples
     """
+    log_prob: FloatTensor
 
     def average(self, x: FloatTensor) -> FloatTensor:
         """Calculate expected value under action distribution."""
         return (self.log_prob.exp() * x).sum(1)
+
+    def entropy(self) -> FloatTensor:
+        return -self.average(self.log_prob)
 
 
 class DiscretePolicy(nn.Module):
@@ -197,25 +220,22 @@ class DiscretePolicy(nn.Module):
         logprobs = logits - logits.logsumexp(dim=-1, keepdim=True)
         return DiscreteDistribution(logprobs)
 
-    def forward(self, observation: Tensor, *, measure: bool = False) -> DiscretePolicyOutput:
-        """Sample action from policy.
-        :returns: action and its log-probability
+    def forward(self, observation: Tensor) -> DiscreteDistribution:
+        """Get action distribution given observation.
+        :returns: action distribution
         """
-        dist = self._action_distribution(observation)
-        return DiscretePolicyOutput(*dist)
+        return self._action_distribution(observation)
 
+    @torch.no_grad()
     def choose_action(self, observation: np.ndarray, *, greedy: bool = False) \
-            -> np.ndarray:
+            -> Tuple[np.ndarray, np.float32]:
         """Choose action from policy for one observation."""
-        with torch.no_grad():
-            pt_obs = torch.from_numpy(observation.astype(np.float32)).unsqueeze(0)
-            dist = self._action_distribution(pt_obs)
-            if greedy:
-                pt_action = dist.greedy_action().action
-            else:
-                pt_action = dist.sample_action().action
-            action = pt_action.squeeze(0).numpy()
-            return action
+        pt_obs = torch.from_numpy(observation.astype(np.float32)).unsqueeze(0)
+        dist = self._action_distribution(pt_obs)
+        sample = dist.greedy_action() if greedy else dist.sample_action()
+        action = sample.action.squeeze(0).numpy()
+        logp = sample.log_prob.numpy()[0]
+        return action, logp
 
     @classmethod
     def from_checkpoint(cls, checkpoint: Checkpoint) -> 'DiscretePolicy':
@@ -234,3 +254,7 @@ class DiscretePolicy(nn.Module):
                      hidden_layers=hidden_layers)
         policy.load_state_dict(state)
         return policy
+
+
+def atanh(x: FloatTensor) -> FloatTensor:
+    return 0.5 * (x.log1p() - (-x).log1p())
