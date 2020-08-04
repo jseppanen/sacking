@@ -47,9 +47,18 @@ def load_env(full_name: str) -> Env:
 class NormalizedActionEnv(gym.Wrapper):
     """Normalize continuous actions to (-1, 1)."""
 
+    def __init__(self, env) -> None:
+        super().__init__(env)
+        spc = env.action_space
+        if isinstance(spc, gym.spaces.Box):
+            dtype = spc.dtype
+            shape = spc.shape
+            ones = np.ones(shape, dtype)
+            self.action_space = gym.spaces.Box(-ones, ones, shape, dtype)
+
     def step(self, action: np.ndarray) -> "EnvStep":
-        if isinstance(self.action_space, gym.spaces.Box):
+        if isinstance(self.env.action_space, gym.spaces.Box):
             action = 0.5 * (action + 1.0)
-            action = action * self.action_space.high + (1.0 - action) * self.action_space.low
-            action = np.clip(action, self.action_space.low, self.action_space.high)
+            action = action * self.env.action_space.high + (1.0 - action) * self.env.action_space.low
+            action = np.clip(action, self.env.action_space.low, self.env.action_space.high)
         return self.env.step(action)
