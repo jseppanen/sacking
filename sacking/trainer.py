@@ -19,9 +19,10 @@ except ImportError:
     wandb = None
 
 from .environment import Env, NormalizedActionEnv
+from .measurements import Measurements
 from .policy import GaussianPolicy, PolicyOutput
 from .q_network import QNetwork
-from .replay_buffer import Batch, EnvSampler, initialize_replay_buffer, sample_batch
+from .replay_buffer import Batch, Datagen, initialize_replay_buffer, sample_batch
 from .typing import Checkpoint, Transition
 
 
@@ -70,6 +71,7 @@ def train(policy: GaussianPolicy,
 
     os.makedirs(rundir, exist_ok=True)
     writer = SummaryWriter(rundir)
+    measurements = Measurements()
     if wandb and wandb.run:
         wandb.config.update(dict(
             batch_size=batch_size,
@@ -92,8 +94,8 @@ def train(policy: GaussianPolicy,
     alpha_optimizer = optim.Adam([log_alpha], lr=learning_rate)
 
     replaybuf: List[Transition] = deque(maxlen=replay_buffer_size)
-    initialize_replay_buffer(replaybuf, env, num_initial_exploration_episodes, batch_size)
-    sampler = EnvSampler(env)
+    sampler = Datagen(env)
+    initialize_replay_buffer(replaybuf, sampler, num_initial_exploration_episodes, batch_size)
 
     def calc_state_value(q_network: QNetwork,
                          observation: FloatTensor,
@@ -105,7 +107,7 @@ def train(policy: GaussianPolicy,
                     else q_network(observation))
         min_q_value = q_values.min(1)[0]
         value = output.average(min_q_value - alpha * output.log_prob)
-        return value
+        return value, q_values
 
     def optimization_step(batch: Batch) -> None:
 
@@ -115,10 +117,9 @@ def train(policy: GaussianPolicy,
         # NB. use old policy that hasn't been updated for current batch
         with torch.no_grad():
             next_action = policy(batch['next_observation'])
-            next_v_value = calc_state_value(target_q_network,
-                                            batch['next_observation'],
-                                            next_action,
-                                            alpha)
+            next_v_value, _ = calc_state_value(
+                target_q_network, batch['next_observation'], next_action, alpha
+            )
             next_v_value *= (~batch['terminal'].bool()).float()
             target_q_value = batch['reward'] + discount * next_v_value
             # replicate same target for all Q networks
@@ -126,35 +127,50 @@ def train(policy: GaussianPolicy,
                 [len(target_q_value), target_q_network.num_nets])
 
         # Update policy weights (Eq. 10)
-        action = policy(batch['observation'])
-        v_value = calc_state_value(q_network,
-                                   batch['observation'],
-                                   action,
-                                   alpha)
-        policy_loss = -v_value.mean()
+        action = policy(batch['observation'], measure=True)
+        action_entropy = -action.average(action.log_prob)
+        v_value, q_values = calc_state_value(
+            q_network, batch['observation'], action, alpha
+        )
+        policy_losses = -v_value
+        policy_loss = policy_losses.mean()
         policy_optimizer.zero_grad()
         policy_loss.backward()
         policy_optimizer.step()
+        Measurements.update({
+            "policy/entropy": action_entropy,
+            "policy/q_value": q_values.flatten(),
+            "policy/temperature": alpha,
+            "losses/policy": policy_losses,
+        })
 
         # Update Q-function parameters (Eq. 6)
         pred_q_values = q_network(batch['observation'], batch['action'])
         assert pred_q_values.shape == target_q_values.shape
-        q_network_loss = F.mse_loss(pred_q_values, target_q_values)
+        q_network_losses = F.mse_loss(pred_q_values, target_q_values, reduction="none")
+        q_network_loss = q_network_losses.mean()
         q_network_optimizer.zero_grad()
         q_network_loss.backward()
         q_network_optimizer.step()
+        Measurements.update({
+            "q_network/reward": batch["reward"],
+            "q_network/value": pred_q_values.flatten(),
+            "q_network/target": target_q_value,
+            "losses/q_network": q_network_losses.flatten(),
+        })
 
         # Adjust temperature (Eq. 18)
         # NB. paper uses alpha (not log) but we follow the softlearning impln
         # see also https://github.com/rail-berkeley/softlearning/issues/37
         if optimize_alpha:
-            action_entropy = action.average(action.log_prob)
-            alpha_loss = (
-                -log_alpha * (action_entropy + target_entropy).detach()
-            ).mean()
+            alpha_losses = (
+                log_alpha * (action_entropy - target_entropy).detach()
+            )
+            alpha_loss = alpha_losses.mean()
             alpha_optimizer.zero_grad()
             alpha_loss.backward()
             alpha_optimizer.step()
+            Measurements.update({"losses/temperature": alpha_losses})
 
         # Update target Q-network weights
         soft_update(target_q_network, q_network,
@@ -186,11 +202,22 @@ def train(policy: GaussianPolicy,
         if step > 0 and step % progress_interval == 0:
             if validation_env:
                 metrics = validate(policy, validation_env, num_episodes=10)
-                for name in metrics:
-                    writer.add_scalar(f'eval/{name}', metrics[name], step)
-                if wandb and wandb.run:
-                    wandb.log(metrics, step=step)
-                logging.info('step %d reward %f', step, metrics['episode_reward'])
+                for key in metrics:
+                    Measurements.update(
+                        {f"eval/{key}": metrics[key] for key in metrics}
+                    )
+                logging.info('step %d eval episode length %.0f return %f',
+                             step,
+                             np.mean(metrics['episode_length']),
+                             np.mean(metrics['episode_return']))
+            measurements.report(writer, step)
+            writer.add_scalar("datagen/total_episodes", sampler.total_episodes, step)
+            writer.add_scalar("datagen/total_steps", sampler.total_steps, step)
+            if wandb and wandb.run:
+                wandb.log({
+                    "datagen/total_episodes": sampler.total_episodes,
+                    "datagen/total_steps": sampler.total_steps,
+                }, step=step)
         if step > 0 and step % checkpoint_interval == 0:
             save_checkpoint(step)
 
@@ -199,20 +226,29 @@ def train(policy: GaussianPolicy,
 
 def validate(policy: GaussianPolicy, env: Env, *,
              num_episodes: int = 1) \
-        -> Dict[str, float]:
+        -> Dict[str, List[float]]:
     """Validate policy on environment
     NB mutates env state!
     """
-    reward_sum = 0.0
+    episode_returns = []
+    episode_lengths = []
     for _ in range(num_episodes):
         observation = env.reset()
         done = False
+        ongoing_return = 0.0
+        ongoing_length = 0
         with torch.no_grad():
             while not done:
                 action = policy.choose_action(observation, greedy=True)
                 observation, reward, done, _ = env.step(action)
-                reward_sum += reward
-    return {'episode_reward': reward_sum / num_episodes}
+                ongoing_return += reward
+                ongoing_length += 1
+        episode_returns.append(ongoing_return)
+        episode_lengths.append(ongoing_length)
+    return {
+        "episode_return": episode_returns,
+        "episode_length": episode_lengths,
+    }
 
 
 def simulate(policy: GaussianPolicy, env: Env) \

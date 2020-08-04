@@ -11,6 +11,7 @@ from torch.nn.functional import softplus
 
 from .fc_network import FCNetwork
 from .typing import Checkpoint
+from .measurements import Measurements
 
 LOG_STD_MAX = 2
 LOG_STD_MIN = -20
@@ -39,11 +40,17 @@ class SquashNormalDistribution(NamedTuple):
     action_log_std: FloatTensor
     squash: bool
 
-    def sample_action(self) -> SquashNormalSample:
+    def sample_action(self, *, measure: bool = False) -> SquashNormalSample:
         action_log_std = self.action_log_std.clamp(
             min=LOG_STD_MIN, max=LOG_STD_MAX)
         latent = torch.randn_like(self.action_mean)
         action = latent * action_log_std.exp() + self.action_mean
+        if measure:
+            Measurements.update({
+                "policy/location": self.action_mean.flatten(),
+                "policy/scale": action_log_std.exp().flatten(),
+                "policy/raw_action": action.flatten(),
+            })
         log_prob = (
             -0.5 * latent ** 2 - action_log_std + LOG_PROB_CONST
         ).sum(1)
@@ -95,12 +102,12 @@ class GaussianPolicy(nn.Module):
         mean, log_std = stats.chunk(2, dim=-1)
         return SquashNormalDistribution(mean, log_std, self._squash)
 
-    def forward(self, observation: Tensor) -> GaussianPolicyOutput:
+    def forward(self, observation: Tensor, *, measure: bool = False) -> GaussianPolicyOutput:
         """Sample action from policy.
         :returns: action and its log-probability
         """
         dist = self._action_distribution(observation)
-        sample = dist.sample_action()
+        sample = dist.sample_action(measure=measure)
         return GaussianPolicyOutput(*sample)
 
     def choose_action(self, observation: np.ndarray, *, greedy: bool = False) \
@@ -190,7 +197,7 @@ class DiscretePolicy(nn.Module):
         logprobs = logits - logits.logsumexp(dim=-1, keepdim=True)
         return DiscreteDistribution(logprobs)
 
-    def forward(self, observation: Tensor) -> DiscretePolicyOutput:
+    def forward(self, observation: Tensor, *, measure: bool = False) -> DiscretePolicyOutput:
         """Sample action from policy.
         :returns: action and its log-probability
         """

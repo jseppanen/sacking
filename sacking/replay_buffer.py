@@ -7,6 +7,7 @@ import torch
 from torch import Tensor
 
 from .environment import Env
+from .measurements import Measurements
 from .policy import GaussianPolicy
 from .typing import Transition
 
@@ -27,12 +28,11 @@ def sample_batch(replaybuf: List[Transition], size: int) \
 
 
 def initialize_replay_buffer(replaybuf: List[Transition],
-                             env: Env,
+                             sampler: "Datagen",
                              num_initial_exploration_episodes: int,
                              num_initial_exploration_steps: int) -> None:
     """Fill replay buffer with episodes from random policy."""
 
-    sampler = EnvSampler(env)
     num_episodes = 0
     while (num_episodes < num_initial_exploration_episodes
            or len(replaybuf) < num_initial_exploration_steps):
@@ -40,8 +40,11 @@ def initialize_replay_buffer(replaybuf: List[Transition],
         num_episodes += 1
 
 
-class EnvSampler:
-    """Run policy on env to get transition samples."""
+class Datagen:
+    """Training data generator, runs policy on env to get transition samples.
+
+    Also known as "experience collection."
+    """
 
     def __init__(self, env: Env):
         self._env = env
@@ -49,6 +52,7 @@ class EnvSampler:
         self._ongoing_episode_length = 0
         self._ongoing_episode_return = 0.0
         self.total_episodes = 0
+        self.total_steps = 0
 
     def sample_episode(self, policy: Optional[GaussianPolicy] = None) \
             -> Generator[Transition, None, None]:
@@ -76,6 +80,7 @@ class EnvSampler:
             action = self._env.action_space.sample()
         # sample transition from the environment
         next_observation, reward, done, _ = self._env.step(action)
+        self.total_steps += 1
         self._ongoing_episode_length += 1
         self._ongoing_episode_return += reward
         if self._ongoing_episode_length == self._env.spec.max_episode_steps:
@@ -92,9 +97,10 @@ class EnvSampler:
         if done:
             self._observation = self._env.reset()
             self.total_episodes += 1
-            logging.info(f'episode {self.total_episodes} '
-                         f'length {self._ongoing_episode_length} '
-                         f'return {self._ongoing_episode_return}')
+            Measurements.update({
+                "datagen/episode_length": self._ongoing_episode_length,
+                "datagen/episode_return": self._ongoing_episode_return,
+            })
             self._ongoing_episode_length = 0
             self._ongoing_episode_return = 0.0
         else:
